@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import replay_memory
+from itertools import count
 from torch.autograd import Variable
 from brain import ActorCritic
 from core import *
@@ -21,14 +22,24 @@ class Agent:
         self.brain = brain
         self.optimizer = torch.optim.Adam(brain.actor_critic.parameters())
 
-    def learn(self, on_policy):
+    def run_episode(self):
+        episode_rewards = 0.
+        end_of_episode = False
+        while not end_of_episode:
+            trajectory_rewards, end_of_episode = self.learning_iteration(on_policy=True)
+            episode_rewards += trajectory_rewards
+            for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
+                self.learning_iteration(on_policy=False)
+        if self.render:
+            print(", episode rewards {}".format(episode_rewards))
+
+    def learning_iteration(self, on_policy):
         actor_critic = ActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
 
-        trajectory = self.explore(actor_critic, MAX_STEPS_BEFORE_UPDATE) \
-                     if on_policy else self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE)
+        trajectory = self.explore(actor_critic) if on_policy else self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE)
 
-        _, _, _, next_states, done, _ = trajectory[-1]
+        _, _, _, next_states, _, _ = trajectory[-1]
         action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(next_states)))
         retrace_action_value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1)
 
@@ -59,7 +70,14 @@ class Agent:
         self.brain.actor_critic.copy_gradients_from(actor_critic)
         self.optimizer.step()
 
-    def explore(self, actor_critic, max_steps):
+        if on_policy:
+            end_of_episode = trajectory[-1].done[0, 0]
+            trajectory_rewards = sum([transition.rewards[0, 0] for transition in trajectory])
+            return trajectory_rewards, end_of_episode
+        else:
+            return None, None
+
+    def explore(self, actor_critic):
         """
         Explore an environment by taking a sequence of actions and saving the results in the memory.
 
@@ -67,22 +85,17 @@ class Agent:
         ----------
         actor_critic : ActorCritic
             The actor-critic model to use to explore.
-        max_steps : int
-            The maximum number of steps to take at a time.
         """
         state = self.env.env.state
         if isinstance(state, tuple):
             state = np.array(list(state))
         trajectory = []
-        rewards = 0.
-        for step in range(max_steps):
+        for step in range(MAX_STEPS_BEFORE_UPDATE):
             action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(state)))
 
             action = action_probabilities.multinomial()
             action = action.data.numpy()
             next_state, reward, done, _ = self.env.step(action[0])
-            if not isinstance(next_state, np.ndarray):
-                raise ValueError
             if self.render:
                 self.env.render()
             transition = replay_memory.Transition(states=state.reshape(1, -1),
@@ -93,12 +106,9 @@ class Agent:
                                                   action_probabilities=action_probabilities.data.numpy().reshape(1, -1))
             self.buffer.add(transition)
             trajectory.append(transition)
-            rewards += reward
             if done:
                 self.env.reset()
                 break
             else:
                 state = next_state
-        if self.render:
-            print(", total rewards {}".format(rewards))
         return trajectory

@@ -7,13 +7,10 @@ from core import *
 
 def run_agent(shared_brain, render=False):
     local_agent = agent.Agent(shared_brain, render)
-    for iteration in range(MAX_ITERATIONS):
+    for episode in range(MAX_EPISODES):
         if render:
-            print("Iteration #{}".format(iteration), end="")
-        local_agent.learn(on_policy=True)
-        for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
-            local_agent.learn(on_policy=False)
-
+            print("Episode #{}".format(episode), end="")
+        local_agent.run_episode()
 
 if __name__ == "__main__":
     if NUMBER_OF_AGENTS == 1:
