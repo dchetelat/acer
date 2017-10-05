@@ -1,7 +1,7 @@
 import torch
 import replay_memory
-import brain
 from torch.autograd import Variable
+from brain import ActorCritic
 from core import *
 
 
@@ -12,17 +12,17 @@ class Agent:
     Parameters
     ----------
     """
-    def __init__(self, brain_actor_critic, render=False):
+    def __init__(self, brain, render=False):
         self.env = gym.make('CartPole-v0')
         self.env.reset()
         self.render = render
         self.buffer = replay_memory.ReplayBuffer()
-        self.brain_actor_critic = brain_actor_critic
-        self.optimizer = torch.optim.Adam(brain_actor_critic.parameters())
+        self.brain = brain
+        self.optimizer = torch.optim.Adam(brain.actor_critic.parameters())
 
     def learn(self, on_policy):
-        actor_critic = brain.ActorCritic()
-        actor_critic.copy_parameters_from(self.brain_actor_critic)
+        actor_critic = ActorCritic()
+        actor_critic.copy_parameters_from(self.brain.actor_critic)
 
         trajectory = self.explore(actor_critic) if on_policy else self.buffer.sample()
 
@@ -54,7 +54,7 @@ class Agent:
 
             retrace_action_value = min(1., importance_weights[actions]) * \
                                    (retrace_action_value - action_values.data[actions]) + value
-        self.brain_actor_critic.copy_gradients_from(actor_critic)
+        self.brain.actor_critic.copy_gradients_from(actor_critic)
         self.optimizer.step()
         pass
 

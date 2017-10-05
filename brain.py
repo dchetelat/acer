@@ -30,9 +30,13 @@ class ActorCritic(torch.nn.Module):
             # parameter.grad.data.copy_(source_parameter.grad.data)
             parameter._grad = source_parameter.grad
 
-brain_actor_critic = ActorCritic()
-brain_actor_critic.share_memory()
+# brain_actor_critic = ActorCritic()
+# brain_actor_critic.share_memory()
 
-# class Brain:
-#     def __init__(self):
-#         self.actor_critic = ActorCritic
+
+class Brain:
+    def __init__(self):
+        self.actor_critic = ActorCritic()
+        self.actor_critic.share_memory()
+
+brain = Brain()
