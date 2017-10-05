@@ -4,7 +4,7 @@ from itertools import zip_longest
 from collections import deque, namedtuple
 
 Transition = namedtuple('Transition', ('states', 'actions', 'rewards', 'next_states',
-                                       'terminal', 'aborted', 'action_probabilities'))
+                                       'done', 'action_probabilities'))
 
 
 class ReplayBuffer:
@@ -12,7 +12,7 @@ class ReplayBuffer:
         self.episodes = deque([[]], maxlen=25)
 
     def add(self, transition):
-        if self.episodes[-1] and (self.episodes[-1][-1].terminal or self.episodes[-1][-1].aborted):
+        if self.episodes[-1] and self.episodes[-1][-1].done:
             self.episodes.append([])
         self.episodes[-1].append(transition)
 
@@ -35,7 +35,6 @@ class ReplayBuffer:
                                 actions=transition.actions,
                                 rewards=np.array([[0.]], dtype=np.float32),
                                 next_states=transition.next_states,
-                                terminal=transition.terminal,
-                                aborted=transition.aborted,
+                                done=transition.done,
                                 action_probabilities=action_probabilities)
         return transition

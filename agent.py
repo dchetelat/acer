@@ -28,13 +28,11 @@ class Agent:
         trajectory = self.explore(actor_critic, MAX_STEPS_BEFORE_UPDATE) \
                      if on_policy else self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE)
 
-        _, _, _, next_states, done, _, _ = trajectory[-1]
+        _, _, _, next_states, done, _ = trajectory[-1]
         action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(next_states)))
-        # retrace_action_value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1) \
-        #                        * torch.from_numpy(1. - done)
         retrace_action_value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1)
 
-        for states, actions, rewards, _, done, _, exploration_probabilities in reversed(trajectory):
+        for states, actions, rewards, _, done, exploration_probabilities in reversed(trajectory):
             action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(states)))
             value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1) * torch.from_numpy(1. - done)
             importance_weights = action_probabilities.data / torch.from_numpy(exploration_probabilities)
@@ -87,11 +85,12 @@ class Agent:
                 raise ValueError
             if self.render:
                 self.env.render()
-            transition = replay_memory.Transition(state.reshape(1, -1), action.reshape(1, -1),
-                                                  np.array([[reward]], dtype=np.float32), next_state.reshape(1, -1),
-                                                  np.array([[done]], dtype=np.float32),
-                                                  np.array([[0.]], dtype=np.float32),
-                                                  action_probabilities.data.numpy().reshape(1, -1))
+            transition = replay_memory.Transition(states=state.reshape(1, -1),
+                                                  actions=action.reshape(1, -1),
+                                                  rewards=np.array([[reward]], dtype=np.float32),
+                                                  next_states=next_state.reshape(1, -1),
+                                                  done=np.array([[done]], dtype=np.float32),
+                                                  action_probabilities=action_probabilities.data.numpy().reshape(1, -1))
             self.buffer.add(transition)
             trajectory.append(transition)
             rewards += reward
