@@ -16,11 +16,15 @@ def run_agent(shared_brain, render=False):
 
 
 if __name__ == "__main__":
-    processes = [mp.Process(target=run_agent, args=(brain.brain, True))
-                 for _ in range(NUMBER_OF_AGENTS - 1)]
-    processes.append(mp.Process(target=run_agent, args=(brain.brain, True)))
-    for process in processes:
-        process.start()
+    if NUMBER_OF_AGENTS == 1:
+        # Don't bother with multiprocessing if only one agent
+        run_agent(brain.brain, render=True)
+    else:
+        processes = [mp.Process(target=run_agent, args=(brain.brain, True))
+                     for _ in range(NUMBER_OF_AGENTS - 1)]
+        processes.append(mp.Process(target=run_agent, args=(brain.brain, True)))
+        for process in processes:
+            process.start()
 
-    for process in processes:
-        process.join()
+        for process in processes:
+            process.join()
