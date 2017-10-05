@@ -30,8 +30,6 @@ class Agent:
         action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(next_states)))
         retrace_action_value = (action_probabilities * action_values).data.sum() * (1. - done)
 
-        actor_critic.zero_grad()
-        self.optimizer.zero_grad()
         for states, actions, rewards, _, done, _, exploration_probabilities in reversed(trajectory):
             action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(states)))
             value = (action_probabilities * action_values).data.sum() * (1. - done)
@@ -56,7 +54,6 @@ class Agent:
                                    (retrace_action_value - action_values.data[actions]) + value
         self.brain.actor_critic.copy_gradients_from(actor_critic)
         self.optimizer.step()
-        pass
 
     def explore(self, actor_critic, max_steps=100):
         """
@@ -66,8 +63,8 @@ class Agent:
         ----------
         actor_critic : ActorCritic
             The actor-critic model to use to explore.
-        initial_state : numpy.ndarray
-            The state to start from.
+        max_steps : int
+            The maximum number of steps to take at a time.
         """
         state = self.env.env.state
         trajectory = []

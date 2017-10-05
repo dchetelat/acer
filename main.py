@@ -5,8 +5,8 @@ from torch import multiprocessing as mp
 from core import *
 
 
-def run_agent(brain, render=False):
-    local_agent = agent.Agent(brain, render)
+def run_agent(shared_brain, render=False):
+    local_agent = agent.Agent(shared_brain, render)
     for iteration in range(MAX_ITERATIONS):
         if render:
             print("Iteration #{}".format(iteration), end="")
@@ -16,7 +16,7 @@ def run_agent(brain, render=False):
 
 
 if __name__ == "__main__":
-    processes = [mp.Process(target=run_agent, args=(brain.brain, False))
+    processes = [mp.Process(target=run_agent, args=(brain.brain, True))
                  for _ in range(NUMBER_OF_AGENTS - 1)]
     processes.append(mp.Process(target=run_agent, args=(brain.brain, True)))
     for process in processes:

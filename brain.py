@@ -22,16 +22,11 @@ class ActorCritic(torch.nn.Module):
 
     def copy_parameters_from(self, source, decay=0.):
         for parameter, source_parameter in zip(self.parameters(), source.parameters()):
-            # parameter.data.copy_(decay * parameter.data + (1 - decay) * source_parameter.data)
             parameter.data.copy_(decay * parameter.data + (1 - decay) * source_parameter.data)
 
     def copy_gradients_from(self, source):
         for parameter, source_parameter in zip(self.parameters(), source.parameters()):
-            # parameter.grad.data.copy_(source_parameter.grad.data)
             parameter._grad = source_parameter.grad
-
-# brain_actor_critic = ActorCritic()
-# brain_actor_critic.share_memory()
 
 
 class Brain:
