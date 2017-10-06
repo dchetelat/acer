@@ -70,6 +70,9 @@ class Agent:
             critic_loss = (action_values.gather(-1, action_indices) - Variable(retrace_action_value)).pow(2)
             critic_loss.mean().backward(retain_graph=True)
 
+            entropy_loss = ENTROPY_REGULARIZATION * (action_probabilities * action_probabilities.log()).sum(-1)
+            entropy_loss.mean().backward(retain_graph=True)
+
             retrace_action_value = importance_weights.gather(-1, action_indices.data).clamp(max=1.) * \
                                    (retrace_action_value - action_values.gather(-1, action_indices).data) + value
         self.brain.actor_critic.copy_gradients_from(actor_critic)
@@ -83,15 +86,16 @@ class Agent:
         else:
             return None, None
 
-    def trust_region_update(self, actor_gradients, action_probabilities, average_action_probabilities):
+    @staticmethod
+    def trust_region_update(actor_gradients, action_probabilities, average_action_probabilities):
         negative_kullback_leibler = - ((average_action_probabilities.log() - action_probabilities.log())
                                        * average_action_probabilities).sum(-1)
         kullback_leibler_gradients = torch.autograd.grad(negative_kullback_leibler.mean(),
                                                          action_probabilities, retain_graph=True)
         updated_actor_gradients = []
         for actor_gradient, kullback_leibler_gradient in zip(actor_gradients, kullback_leibler_gradients):
-            scale = torch.div(actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT,
-                              actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
+            scale = actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT
+            scale = torch.div(scale, actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
             updated_actor_gradients.append(actor_gradient - scale * kullback_leibler_gradient)
         return updated_actor_gradients
 
