@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 import replay_memory
-from itertools import count
 from torch.autograd import Variable
 from brain import ActorCritic
 from core import *
@@ -9,10 +8,14 @@ from core import *
 
 class Agent:
     """
-    Agent that learns an optimal policy using the ACER reinforcement learning algorithm.
+    Agent that learns an optimal policy using ACER.
 
     Parameters
     ----------
+    brain : brain.Brain
+        The brain to update.
+    render : boolean, optional
+        Should the agent render its actions in the on-policy phase?
     """
     def __init__(self, brain, render=False):
         self.env = gym.make('CartPole-v0')
@@ -23,6 +26,9 @@ class Agent:
         self.optimizer = torch.optim.Adam(brain.actor_critic.parameters())
 
     def run_episode(self):
+        """
+        Run a complete episode. Analogue of Algorithm 1 in the paper.
+        """
         episode_rewards = 0.
         end_of_episode = False
         while not end_of_episode:
@@ -34,10 +40,27 @@ class Agent:
             print(", episode rewards {}".format(episode_rewards))
 
     def learning_iteration(self, on_policy):
+        """
+        Conduct a single learning iteration. Analogue of Algorithm 2 in the paper.
+
+        Parameters
+        ----------
+        on_policy : boolean
+            Should the iteration be on-policy or off-policy?
+
+        Returns
+        -------
+        trajectory_rewards : float or None
+            The total rewards accumulated during the iteration. None if off-policy.
+        end_of_episode : boolean or None
+            Did the iteration reach the end of an episode? None if off-policy.
+        """
         actor_critic = ActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
 
         trajectory = self.explore(actor_critic) if on_policy else self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE)
+        if not trajectory:
+            return None, None
 
         _, _, _, next_states, _, _ = trajectory[-1]
         action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(next_states)))
@@ -88,6 +111,24 @@ class Agent:
 
     @staticmethod
     def trust_region_update(actor_gradients, action_probabilities, average_action_probabilities):
+        """
+        Update the actor gradients so that they satisfy a linearized KL constraint with respect
+        to the average actor-critic network. See Section 3.3 of the paper for details.
+
+        Parameters
+        ----------
+        actor_gradients : tuple of torch.Tensor's
+            The original gradients.
+        action_probabilities
+            The action probabilities according to the current actor-critic network.
+        average_action_probabilities
+            The action probabilities according to the average actor-critic network.
+
+        Returns
+        -------
+        tuple of torch.Tensor's
+            The updated gradients.
+        """
         negative_kullback_leibler = - ((average_action_probabilities.log() - action_probabilities.log())
                                        * average_action_probabilities).sum(-1)
         kullback_leibler_gradients = torch.autograd.grad(negative_kullback_leibler.mean(),

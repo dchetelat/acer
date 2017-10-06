@@ -4,6 +4,9 @@ from core import *
 
 
 class ActorCritic(torch.nn.Module):
+    """
+    Actor-critic network used in A3C and ACER.
+    """
     def __init__(self):
         super().__init__()
         self.input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
@@ -13,6 +16,21 @@ class ActorCritic(torch.nn.Module):
             self.action_value_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
 
     def forward(self, states):
+        """
+        Compute a forward pass in the network.
+
+        Parameters
+        ----------
+        states : torch.Tensor
+            The states for which the action probabilities and the action-values must be computed.
+
+        Returns
+        -------
+        action_probabilities : torch.Tensor
+            The action probabilities of the policy according to the actor.
+        action_probabilities : torch.Tensor
+            The action-values of the policy according to the critic.
+        """
         hidden = F.relu(self.input_layer(states))
         hidden = F.relu(self.hidden_layer(hidden))
         if CONTROL is 'discrete':
@@ -21,15 +39,37 @@ class ActorCritic(torch.nn.Module):
             return action_probabilities, action_values
 
     def copy_parameters_from(self, source, decay=0.):
+        """
+        Copy the parameters from another network.
+
+        Parameters
+        ----------
+        source : ActorCritic
+            The network from which to copy the parameters.
+        decay : float, optional
+            How much decay should be applied? Default is 0., which means the parameters
+            are completely copied.
+        """
         for parameter, source_parameter in zip(self.parameters(), source.parameters()):
             parameter.data.copy_(decay * parameter.data + (1 - decay) * source_parameter.data)
 
     def copy_gradients_from(self, source):
+        """
+        Copy the gradients from another network.
+
+        Parameters
+        ----------
+        source : ActorCritic
+            The network from which to copy the gradients.
+        """
         for parameter, source_parameter in zip(self.parameters(), source.parameters()):
             parameter._grad = source_parameter.grad
 
 
 class Brain:
+    """
+    A centralized brain for the agents.
+    """
     def __init__(self):
         self.actor_critic = ActorCritic()
         self.actor_critic.share_memory()

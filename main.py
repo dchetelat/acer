@@ -1,4 +1,3 @@
-import numpy as np
 import brain
 import agent
 from torch import multiprocessing as mp
@@ -6,6 +5,16 @@ from core import *
 
 
 def run_agent(shared_brain, render=False):
+    """
+    Run the agent.
+
+    Parameters
+    ----------
+    shared_brain : brain.Brain
+        The shared brain the agents will use and update.
+    render : boolean, optional
+        Should the agent render its actions in the on-policy phase?
+    """
     local_agent = agent.Agent(shared_brain, render)
     for episode in range(MAX_EPISODES):
         if render:
