@@ -33,5 +33,8 @@ class Brain:
     def __init__(self):
         self.actor_critic = ActorCritic()
         self.actor_critic.share_memory()
+        self.average_actor_critic = ActorCritic()
+        self.average_actor_critic.share_memory()
+        self.average_actor_critic.copy_parameters_from(self.actor_critic)
 
 brain = Brain()

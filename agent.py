@@ -45,6 +45,7 @@ class Agent:
 
         for states, actions, rewards, _, done, exploration_probabilities in reversed(trajectory):
             action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(states)))
+            average_action_probabilities, _ = self.brain.average_actor_critic(Variable(torch.FloatTensor(states)))
             value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1) * torch.from_numpy(1. - done)
             importance_weights = action_probabilities.data / torch.from_numpy(exploration_probabilities)
             action_indices = Variable(torch.LongTensor(actions))
@@ -56,19 +57,24 @@ class Agent:
             retrace_advantage = retrace_action_value - value
 
             actor_loss = - Variable(importance_weights.gather(-1, action_indices.data).clamp(max=TRUNCATION_PARAMETER)
-                           * retrace_advantage) * action_probabilities.gather(-1, action_indices).log()
+                                    * retrace_advantage) \
+                         * action_probabilities.gather(-1, action_indices).log()
             actor_loss += - (Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
-                                      naive_advantage * action_probabilities.data) * action_probabilities.log()).sum()
+                                      naive_advantage * action_probabilities.data)
+                             * action_probabilities.log()).sum()
+            actor_gradients = torch.autograd.grad(actor_loss.mean(), action_probabilities, retain_graph=True)
+            actor_gradients = self.trust_region_update(actor_gradients, action_probabilities,
+                                                       Variable(average_action_probabilities.data))
+            action_probabilities.backward(actor_gradients, retain_graph=True)
 
             critic_loss = (action_values.gather(-1, action_indices) - Variable(retrace_action_value)).pow(2)
-
-            actor_loss.mean().backward(retain_graph=True)
             critic_loss.mean().backward(retain_graph=True)
 
             retrace_action_value = importance_weights.gather(-1, action_indices.data).clamp(max=1.) * \
                                    (retrace_action_value - action_values.gather(-1, action_indices).data) + value
         self.brain.actor_critic.copy_gradients_from(actor_critic)
         self.optimizer.step()
+        self.brain.average_actor_critic.copy_parameters_from(self.brain.actor_critic, decay=TRUST_REGION_DECAY)
 
         if on_policy:
             end_of_episode = trajectory[-1].done[0, 0]
@@ -76,6 +82,18 @@ class Agent:
             return trajectory_rewards, end_of_episode
         else:
             return None, None
+
+    def trust_region_update(self, actor_gradients, action_probabilities, average_action_probabilities):
+        negative_kullback_leibler = - ((average_action_probabilities.log() - action_probabilities.log())
+                                       * average_action_probabilities).sum(-1)
+        kullback_leibler_gradients = torch.autograd.grad(negative_kullback_leibler.mean(),
+                                                         action_probabilities, retain_graph=True)
+        updated_actor_gradients = []
+        for actor_gradient, kullback_leibler_gradient in zip(actor_gradients, kullback_leibler_gradients):
+            scale = torch.div(actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT,
+                              actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
+            updated_actor_gradients.append(actor_gradient - scale * kullback_leibler_gradient)
+        return updated_actor_gradients
 
     def explore(self, actor_critic):
         """
