@@ -5,7 +5,7 @@ from collections import deque, namedtuple
 from core import *
 
 Transition = namedtuple('Transition', ('states', 'actions', 'rewards', 'next_states',
-                                       'done', 'action_probabilities'))
+                                       'done', 'exploration_statistics'))
 
 
 class ReplayBuffer:
@@ -72,12 +72,12 @@ class ReplayBuffer:
         """
         if not transition.done:
             raise ValueError("Can only extend a terminal transition.")
-        action_probabilities = np.ones_like(transition.action_probabilities) \
-                               / transition.action_probabilities.shape[-1]
+        exploration_statistics = np.ones_like(transition.exploration_statistics) \
+                               / transition.exploration_statistics.shape[-1]
         transition = Transition(states=transition.next_states,
                                 actions=transition.actions,
                                 rewards=np.array([[0.]], dtype=np.float32),
                                 next_states=transition.next_states,
                                 done=transition.done,
-                                action_probabilities=action_probabilities)
+                                exploration_statistics=exploration_statistics)
         return transition

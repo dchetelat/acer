@@ -15,11 +15,15 @@ def run_agent(shared_brain, render=False):
     render : boolean, optional
         Should the agent render its actions in the on-policy phase?
     """
-    local_agent = agent.Agent(shared_brain, render)
+    if CONTROL is 'discrete':
+        local_agent = agent.DiscreteAgent(shared_brain, render)
+    else:
+        local_agent = agent.ContinuousAgent(shared_brain, render)
     for episode in range(MAX_EPISODES):
         if render:
             print("Episode #{}".format(episode), end="")
         local_agent.run_episode()
+
 
 if __name__ == "__main__":
     if NUMBER_OF_AGENTS == 1:

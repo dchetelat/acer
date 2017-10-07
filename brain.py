@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from torch.autograd import Variable
 from core import *
 
 
@@ -9,34 +10,9 @@ class ActorCritic(torch.nn.Module):
     """
     def __init__(self):
         super().__init__()
-        self.input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
-        self.hidden_layer = torch.nn.Linear(32, 32)
-        self.action_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
-        if CONTROL is 'discrete':
-            self.action_value_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
 
-    def forward(self, states):
-        """
-        Compute a forward pass in the network.
-
-        Parameters
-        ----------
-        states : torch.Tensor
-            The states for which the action probabilities and the action-values must be computed.
-
-        Returns
-        -------
-        action_probabilities : torch.Tensor
-            The action probabilities of the policy according to the actor.
-        action_probabilities : torch.Tensor
-            The action-values of the policy according to the critic.
-        """
-        hidden = F.relu(self.input_layer(states))
-        hidden = F.relu(self.hidden_layer(hidden))
-        if CONTROL is 'discrete':
-            action_probabilities = F.softmax(self.action_layer(hidden))
-            action_values = self.action_value_layer(hidden)
-            return action_probabilities, action_values
+    def forward(self, *input):
+        raise NotImplementedError
 
     def copy_parameters_from(self, source, decay=0.):
         """
@@ -66,15 +42,132 @@ class ActorCritic(torch.nn.Module):
             parameter._grad = source_parameter.grad
 
 
+class DiscreteActorCritic(ActorCritic):
+    """
+    Discrete actor-critic network used in A3C and ACER.
+    """
+    def __init__(self):
+        super().__init__()
+        self.input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
+        self.hidden_layer = torch.nn.Linear(32, 32)
+        self.action_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
+        self.action_value_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
+
+    def forward(self, states):
+        """
+        Compute a forward pass in the network.
+
+        Parameters
+        ----------
+        states : torch.Tensor
+            The states for which the action probabilities and the action-values must be computed.
+
+        Returns
+        -------
+        action_probabilities : torch.Tensor
+            The action probabilities of the policy according to the actor.
+        action_probabilities : torch.Tensor
+            The action-values of the policy according to the critic.
+        """
+        hidden = F.relu(self.input_layer(states))
+        hidden = F.relu(self.hidden_layer(hidden))
+        action_probabilities = F.softmax(self.action_layer(hidden))
+        action_values = self.action_value_layer(hidden)
+        return action_probabilities, action_values
+
+
+class ContinuousActorCritic(ActorCritic):
+    """
+    Discrete actor-critic network used in A3C and ACER.
+    """
+    def __init__(self):
+        super().__init__()
+        self.policy_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
+        self.policy_hidden_layer = torch.nn.Linear(32, 32)
+        self.policy_mean_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
+        self.policy_logsd = torch.nn.Parameter(torch.ones((1, ACTION_SPACE_DIM)))
+
+        self.sdn_state_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
+        self.sdn_action_input_layer = torch.nn.Linear(ACTION_SPACE_DIM, 32)
+        self.sdn_hidden_layer = torch.nn.Linear(32, 32)
+        self.sdn_advantage_layer = torch.nn.Linear(32, 1)
+        self.sdn_value_layer = torch.nn.Linear(32, 1)
+
+    def forward(self, states, actions=None):
+        """
+        Compute a forward pass in the network.
+
+        Parameters
+        ----------
+        states : torch.Tensor
+            The states for which the action probabilities and the action-values must be computed.
+        actions : torch.Tensor, optional
+            The actions for which the action-values must be computed.
+
+        Returns
+        -------
+        action_probabilities : torch.Tensor
+            The action probabilities of the policy according to the actor.
+        action_value : torch.Tensor
+            The action-value of the policy according to the critic.
+        value : torch.Tensor
+            The value of the policy according to the critic.
+        """
+        hidden = F.relu(self.policy_input_layer(states))
+        hidden = F.relu(self.policy_hidden_layer(hidden))
+        policy_mean = self.policy_mean_layer(hidden)
+
+        if actions is not None:
+            advantage, value = self.sdn_forward(states, actions)
+            action_value = advantage + value
+
+            action_samples = [Variable(torch.normal(policy_mean.data,
+                                                    self.policy_logsd.data * torch.ones(policy_mean.size())))
+                              for _ in range(5)]
+            advantage_samples = [self.sdn_forward(states, action_sample)[0] for action_sample in action_samples]
+            action_value -= sum(advantage_samples) / len(advantage_samples)
+            return policy_mean, action_value, value
+        else:
+            return policy_mean, None, None
+
+    def sdn_forward(self, states, actions):
+        hidden = F.relu(self.sdn_state_input_layer(states) + self.sdn_action_input_layer(actions))
+        hidden = F.relu(self.sdn_hidden_layer(hidden))
+        advantage = self.sdn_advantage_layer(hidden)
+        value = self.sdn_value_layer(hidden)
+        return advantage, value
+
+
 class Brain:
     """
     A centralized brain for the agents.
     """
     def __init__(self):
-        self.actor_critic = ActorCritic()
+        self.actor_critic = None
+        self.average_actor_critic = None
+
+
+class DiscreteBrain(Brain):
+    def __init__(self):
+        super().__init__()
+        self.actor_critic = DiscreteActorCritic()
         self.actor_critic.share_memory()
-        self.average_actor_critic = ActorCritic()
+        self.average_actor_critic = DiscreteActorCritic()
         self.average_actor_critic.share_memory()
         self.average_actor_critic.copy_parameters_from(self.actor_critic)
 
-brain = Brain()
+
+class ContinuousBrain(Brain):
+    def __init__(self):
+        super().__init__()
+        self.actor_critic = ContinuousActorCritic()
+        self.actor_critic.share_memory()
+        self.average_actor_critic = ContinuousActorCritic()
+        self.average_actor_critic.share_memory()
+        self.average_actor_critic.copy_parameters_from(self.actor_critic)
+
+
+if CONTROL is 'discrete':
+    brain = DiscreteBrain()
+else:
+    brain = ContinuousBrain()
