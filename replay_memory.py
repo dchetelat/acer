@@ -1,5 +1,5 @@
 import random
-import numpy as np
+import torch
 from itertools import zip_longest
 from collections import deque, namedtuple
 from core import *
@@ -24,7 +24,7 @@ class ReplayBuffer:
         transition : Transition
             The transition to add.
         """
-        if self.episodes[-1] and self.episodes[-1][-1].done:
+        if self.episodes[-1] and self.episodes[-1][-1].done[0, 0]:
             self.episodes.append([])
         self.episodes[-1].append(transition)
 
@@ -50,7 +50,7 @@ class ReplayBuffer:
         for transitions in zip_longest(*trajectories, fillvalue=None):
             transitions = [transition if transition else self.extend(previous_transition)
                            for transition, previous_transition in zip(transitions, previous_transitions)]
-            batch.append(Transition(*map(lambda data: np.vstack(data), zip(*transitions))))
+            batch.append(Transition(*map(lambda data: torch.cat(data, dim=0), zip(*transitions))))
             previous_transitions = transitions
         return batch
 
@@ -70,13 +70,13 @@ class ReplayBuffer:
         Transition
             The new transition that can be used to extend a trajectory.
         """
-        if not transition.done:
+        if not transition.done[0, 0]:
             raise ValueError("Can only extend a terminal transition.")
-        exploration_statistics = np.ones_like(transition.exploration_statistics) \
-                               / transition.exploration_statistics.shape[-1]
+        exploration_statistics = torch.ones(transition.exploration_statistics.size()) \
+                                 / transition.exploration_statistics.size(-1)
         transition = Transition(states=transition.next_states,
                                 actions=transition.actions,
-                                rewards=np.array([[0.]], dtype=np.float32),
+                                rewards=torch.FloatTensor([[0.]]),
                                 next_states=transition.next_states,
                                 done=transition.done,
                                 exploration_statistics=exploration_statistics)

@@ -2,7 +2,8 @@ import gym
 from gym.spaces import Discrete as DiscreteSpace
 from gym.spaces import Box as ContinuousSpace
 
-ENVIRONMENT_NAME = 'MountainCarContinuous-v0'
+# ENVIRONMENT_NAME = 'MountainCarContinuous-v0'
+ENVIRONMENT_NAME = 'CartPole-v0'
 
 env = gym.make(ENVIRONMENT_NAME)
 action_space = env.action_space

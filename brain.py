@@ -86,12 +86,12 @@ class ContinuousActorCritic(ActorCritic):
         self.policy_hidden_layer = torch.nn.Linear(32, 32)
         self.policy_mean_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
         self.policy_logsd = torch.nn.Parameter(torch.ones((1, ACTION_SPACE_DIM)))
+        self.value_layer = torch.nn.Linear(32, 1)
 
         self.sdn_state_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
         self.sdn_action_input_layer = torch.nn.Linear(ACTION_SPACE_DIM, 32)
         self.sdn_hidden_layer = torch.nn.Linear(32, 32)
         self.sdn_advantage_layer = torch.nn.Linear(32, 1)
-        self.sdn_value_layer = torch.nn.Linear(32, 1)
 
     def forward(self, states, actions=None):
         """
@@ -108,17 +108,18 @@ class ContinuousActorCritic(ActorCritic):
         -------
         action_probabilities : torch.Tensor
             The action probabilities of the policy according to the actor.
-        action_value : torch.Tensor
-            The action-value of the policy according to the critic.
         value : torch.Tensor
             The value of the policy according to the critic.
+        action_value : torch.Tensor
+            The action-value of the policy according to the critic.
         """
         hidden = F.relu(self.policy_input_layer(states))
         hidden = F.relu(self.policy_hidden_layer(hidden))
         policy_mean = self.policy_mean_layer(hidden)
+        value = self.value_layer(hidden)
 
         if actions is not None:
-            advantage, value = self.sdn_forward(states, actions)
+            advantage = self.sdn_forward(states, actions)
             action_value = advantage + value
 
             action_samples = [Variable(torch.normal(policy_mean.data,
@@ -126,16 +127,15 @@ class ContinuousActorCritic(ActorCritic):
                               for _ in range(5)]
             advantage_samples = [self.sdn_forward(states, action_sample)[0] for action_sample in action_samples]
             action_value -= sum(advantage_samples) / len(advantage_samples)
-            return policy_mean, action_value, value
+            return policy_mean, value, action_value
         else:
-            return policy_mean, None, None
+            return policy_mean, value, None
 
     def sdn_forward(self, states, actions):
         hidden = F.relu(self.sdn_state_input_layer(states) + self.sdn_action_input_layer(actions))
         hidden = F.relu(self.sdn_hidden_layer(hidden))
         advantage = self.sdn_advantage_layer(hidden)
-        value = self.sdn_value_layer(hidden)
-        return advantage, value
+        return advantage
 
 
 class Brain:

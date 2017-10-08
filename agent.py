@@ -28,37 +28,6 @@ class Agent:
     def learning_iteration(self, replay):
         raise NotImplementedError
 
-    @staticmethod
-    def trust_region_update(actor_gradients, action_probabilities, average_action_probabilities):
-        """
-        Update the actor gradients so that they satisfy a linearized KL constraint with respect
-        to the average actor-critic network. See Section 3.3 of the paper for details.
-
-        Parameters
-        ----------
-        actor_gradients : tuple of torch.Tensor's
-            The original gradients.
-        action_probabilities
-            The action probabilities according to the current actor-critic network.
-        average_action_probabilities
-            The action probabilities according to the average actor-critic network.
-
-        Returns
-        -------
-        tuple of torch.Tensor's
-            The updated gradients.
-        """
-        negative_kullback_leibler = - ((average_action_probabilities.log() - action_probabilities.log())
-                                       * average_action_probabilities).sum(-1)
-        kullback_leibler_gradients = torch.autograd.grad(negative_kullback_leibler.mean(),
-                                                         action_probabilities, retain_graph=True)
-        updated_actor_gradients = []
-        for actor_gradient, kullback_leibler_gradient in zip(actor_gradients, kullback_leibler_gradients):
-            scale = actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT
-            scale = torch.div(scale, actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
-            updated_actor_gradients.append(actor_gradient - scale * kullback_leibler_gradient)
-        return updated_actor_gradients
-
     def explore(self, actor_critic):
         """
         Explore an environment by taking a sequence of actions and saving the results in the memory.
@@ -68,32 +37,33 @@ class Agent:
         actor_critic : ActorCritic
             The actor-critic model to use to explore.
         """
-        state = self.env.env.state
-        if isinstance(state, tuple):
-            state = np.array(list(state))
+        state = torch.FloatTensor(self.env.env.state)
+        # if isinstance(state, tuple):
+        #     state = np.array(list(state))
         trajectory = []
         for step in range(MAX_STEPS_BEFORE_UPDATE):
-
             if CONTROL is 'discrete':
-                action_probabilities, *_ = actor_critic(Variable(torch.FloatTensor(state)))
+                action_probabilities, *_ = actor_critic(Variable(state))
                 action = action_probabilities.multinomial()
-                action = action.data.numpy()
-                exploration_statistics = action_probabilities.data.numpy().reshape(1, -1)
-                next_state, reward, done, _ = self.env.step(action[0])
+                action = action.data
+                exploration_statistics = action_probabilities.data.view(1, -1)
+                next_state, reward, done, _ = self.env.step(action.numpy()[0])
+                next_state = torch.FloatTensor(next_state)
             else:
-                policy_mean, *_ = actor_critic(Variable(torch.FloatTensor(state)))
+                policy_mean, *_ = actor_critic(Variable(state))
                 policy_logsd = actor_critic.policy_logsd
-                action = torch.normal(policy_mean.data, torch.exp(policy_logsd.data)).numpy()
-                exploration_statistics = np.concatenate([policy_mean.data.numpy().reshape(1, -1),
-                                                         policy_logsd.data.numpy().reshape(1, -1)], axis=1)
-                next_state, reward, done, _ = self.env.step(action)
+                action = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
+                exploration_statistics = torch.cat([policy_mean.data.view(1, -1),
+                                                    policy_logsd.data.view(1, -1)], dim=1)
+                next_state, reward, done, _ = self.env.step(action.numpy())
+                next_state = torch.FloatTensor(next_state)
             if self.render:
                 self.env.render()
-            transition = replay_memory.Transition(states=state.reshape(1, -1),
-                                                  actions=action.reshape(1, -1),
-                                                  rewards=np.array([[reward]], dtype=np.float32),
-                                                  next_states=next_state.reshape(1, -1),
-                                                  done=np.array([[done]], dtype=np.float32),
+            transition = replay_memory.Transition(states=state.view(1, -1),
+                                                  actions=action.view(1, -1),
+                                                  rewards=torch.FloatTensor([[reward]]),
+                                                  next_states=next_state.view(1, -1),
+                                                  done=torch.FloatTensor([[done]]),
                                                   exploration_statistics=exploration_statistics)
             self.buffer.add(transition)
             trajectory.append(transition)
@@ -116,10 +86,10 @@ class DiscreteAgent(Agent):
         episode_rewards = 0.
         end_of_episode = False
         while not end_of_episode:
-            trajectory_rewards, end_of_episode = self.learning_iteration(on_policy=True)
+            trajectory_rewards, end_of_episode = self.learning_iteration(replay=False)
             episode_rewards += trajectory_rewards
             for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
-                self.learning_iteration(on_policy=False)
+                self.learning_iteration(replay=True)
         if self.render:
             print(", episode rewards {}".format(episode_rewards))
 
@@ -148,28 +118,29 @@ class DiscreteAgent(Agent):
             return None, None
 
         _, _, _, next_states, _, _ = trajectory[-1]
-        action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(next_states)))
+        action_probabilities, action_values = actor_critic(Variable(next_states))
         retrace_action_value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1)
 
         for states, actions, rewards, _, done, exploration_probabilities in reversed(trajectory):
-            action_probabilities, action_values = actor_critic(Variable(torch.FloatTensor(states)))
-            average_action_probabilities, _ = self.brain.average_actor_critic(Variable(torch.FloatTensor(states)))
-            value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1) * torch.from_numpy(1. - done)
-            importance_weights = action_probabilities.data / torch.from_numpy(exploration_probabilities)
-            action_indices = Variable(torch.LongTensor(actions))
+            action_probabilities, action_values = actor_critic(Variable(states))
+            average_action_probabilities, _ = self.brain.average_actor_critic(Variable(states))
+            value = (action_probabilities * action_values).data.sum(-1).unsqueeze(-1) * (1. - done)
+            action_indices = Variable(actions.long())
+
+            importance_weights = action_probabilities.data / exploration_probabilities
 
             naive_advantage = action_values.gather(-1, action_indices).data - value
-            retrace_action_value = torch.FloatTensor(rewards) \
-                                   + DISCOUNT_FACTOR * retrace_action_value * torch.from_numpy(1. - done)
+            retrace_action_value = rewards + DISCOUNT_FACTOR * retrace_action_value * (1. - done)
             retrace_advantage = retrace_action_value - value
 
             # Actor
             actor_loss = - Variable(importance_weights.gather(-1, action_indices.data).clamp(max=TRUNCATION_PARAMETER)
                                     * retrace_advantage) * action_probabilities.gather(-1, action_indices).log()
-            actor_loss += - (Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
-                                      naive_advantage * action_probabilities.data) * action_probabilities.log()).sum()
+            bias_correction = Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
+                                      naive_advantage * action_probabilities.data) * action_probabilities.log()
+            actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
             actor_gradients = torch.autograd.grad(actor_loss.mean(), action_probabilities, retain_graph=True)
-            actor_gradients = self.trust_region_update(actor_gradients, action_probabilities,
+            actor_gradients = self.discrete_trust_region_update(actor_gradients, action_probabilities,
                                                        Variable(average_action_probabilities.data))
             action_probabilities.backward(actor_gradients, retain_graph=True)
 
@@ -193,6 +164,37 @@ class DiscreteAgent(Agent):
             return trajectory_rewards, end_of_episode
         else:
             return None, None
+
+    @staticmethod
+    def discrete_trust_region_update(actor_gradients, action_probabilities, average_action_probabilities):
+        """
+        Update the actor gradients so that they satisfy a linearized KL constraint with respect
+        to the average actor-critic network. See Section 3.3 of the paper for details.
+
+        Parameters
+        ----------
+        actor_gradients : tuple of torch.Tensor's
+            The original gradients.
+        action_probabilities
+            The action probabilities according to the current actor-critic network.
+        average_action_probabilities
+            The action probabilities according to the average actor-critic network.
+
+        Returns
+        -------
+        tuple of torch.Tensor's
+            The updated gradients.
+        """
+        negative_kullback_leibler = - ((average_action_probabilities.log() - action_probabilities.log())
+                                       * average_action_probabilities).sum(-1)
+        kullback_leibler_gradients = torch.autograd.grad(negative_kullback_leibler.mean(),
+                                                         action_probabilities, retain_graph=True)
+        updated_actor_gradients = []
+        for actor_gradient, kullback_leibler_gradient in zip(actor_gradients, kullback_leibler_gradients):
+            scale = actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT
+            scale = torch.div(scale, actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
+            updated_actor_gradients.append(actor_gradient - scale * kullback_leibler_gradient)
+        return updated_actor_gradients
 
 
 class ContinuousAgent(Agent):
@@ -240,19 +242,83 @@ class ContinuousAgent(Agent):
             trajectory_rewards = sum([transition.rewards[0, 0] for transition in trajectory])
             return trajectory_rewards, end_of_episode
 
+        _, _, _, next_states, _, _ = trajectory[-1]
+        _, final_value, _ = actor_critic(Variable(next_states))
+        retrace_action_value = final_value.data
+        opc_action_value = final_value.data
+
         for states, actions, rewards, _, done, exploration_statistics in reversed(trajectory):
-            policy_mean, action_values, values = actor_critic(Variable(torch.FloatTensor(states)),
-                                                              Variable(torch.FloatTensor(actions)))
-            exploration_statistics = torch.split(torch.from_numpy(exploration_statistics),
-                                                 split_size=exploration_statistics.shape[1] // 2, dim=1)
+            policy_mean, value, action_value = actor_critic(Variable(states), Variable(actions))
+            policy_logsd = actor_critic.policy_logsd
+            average_policy_mean, *_ = self.brain.average_actor_critic(Variable(states), Variable(actions))
+            average_policy_logsd = self.brain.average_actor_critic.policy_logsd
+            exploration_statistics = torch.split(exploration_statistics,
+                                                 split_size=exploration_statistics.size(-1) // 2, dim=-1)
             exploration_policy_mean, exploration_policy_logsd = exploration_statistics
-            importance_weights = self.normal_density(torch.from_numpy(actions),
-                                                     policy_mean.data, self.brain.actor_critic.policy_logsd.data)
-            importance_weights /= self.normal_density(torch.from_numpy(actions),
-                                                      exploration_policy_mean, exploration_policy_logsd)
+
+            importance_weights = self.normal_density(actions, policy_mean.data, policy_logsd.data)
+            importance_weights /= self.normal_density(actions,  exploration_policy_mean, exploration_policy_logsd)
+            truncation_parameter = importance_weights.pow(1 / ACTION_SPACE_DIM).clamp(max=1.)[0, 0]
+            alternative_actions = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
+            _, _, alternative_action_value = actor_critic(Variable(states), Variable(alternative_actions))
+            alternative_importance_weights = self.normal_density(alternative_actions,
+                                                                 policy_mean.data, policy_logsd.data)
+            alternative_importance_weights /= self.normal_density(alternative_actions,
+                                                                  exploration_policy_mean, exploration_policy_logsd)
+
+            naive_alternative_advantage = alternative_action_value.data - value.data
+            retrace_action_value = rewards + DISCOUNT_FACTOR * retrace_action_value * (1. - done)
+            retrace_advantage = retrace_action_value - value.data
+            opc_action_value = rewards + DISCOUNT_FACTOR * opc_action_value * (1. - done)
+            opc_advantage = opc_action_value - value.data
+
+            # Actor
+            actor_loss = - Variable(importance_weights.clamp(max=truncation_parameter) * opc_advantage) \
+                         * self.normal_density(Variable(actions), policy_mean, policy_logsd).log()
+            bias_correction = Variable((1 - truncation_parameter / alternative_importance_weights).clamp(min=0.) *
+                                       naive_alternative_advantage) \
+                              * self.normal_density(Variable(alternative_actions), policy_mean, policy_logsd).log()
+            actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
+            actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
+            actor_gradients = self.continuous_trust_region_update(actor_gradients, policy_mean, policy_logsd,
+                                                                  average_policy_mean, average_policy_logsd)
+            torch.autograd.backward((policy_mean, policy_logsd), actor_gradients, retain_graph=True)
+
 
         return None, None
 
     @staticmethod
     def normal_density(action, mean, logsd):
         return torch.exp(-(action - mean).pow(2) / 2 / torch.exp(2 * logsd)) / np.sqrt(2 * np.pi) / torch.exp(logsd)
+
+    @staticmethod
+    def continuous_trust_region_update(actor_gradients, mean, logsd, average_mean, average_logsd):
+        """
+        Update the actor gradients so that they satisfy a linearized KL constraint with respect
+        to the average actor-critic network. See Section 3.3 of the paper for details.
+
+        Parameters
+        ----------
+        actor_gradients : tuple of torch.Tensor's
+            The original gradients.
+        mean, logsd
+            The policy parameters according to the current actor-critic network.
+        average_mean, average_logsd
+            The policy parameters according to the average actor-critic network.
+
+        Returns
+        -------
+        tuple of torch.Tensor's
+            The updated gradients.
+        """
+        negative_kullback_leibler = 0.5 + average_logsd - logsd \
+                                    - (torch.exp(2 * average_logsd) + (mean - average_mean).pow(2)) \
+                                      / 2 / torch.exp(2 * logsd)
+        kullback_leibler_gradients = torch.autograd.grad(negative_kullback_leibler.mean(),
+                                                         (mean, logsd), retain_graph=True)
+        updated_actor_gradients = []
+        for actor_gradient, kullback_leibler_gradient in zip(actor_gradients, kullback_leibler_gradients):
+            scale = actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT
+            scale = torch.div(scale, actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
+            updated_actor_gradients.append(actor_gradient - scale * kullback_leibler_gradient)
+        return updated_actor_gradients
