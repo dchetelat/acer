@@ -267,15 +267,13 @@ class ContinuousAgent(Agent):
                                                                   exploration_policy_mean, exploration_policy_logsd)
 
             naive_alternative_advantage = alternative_action_value.data - value.data
-            retrace_action_value = rewards + DISCOUNT_FACTOR * retrace_action_value * (1. - done)
-            retrace_advantage = retrace_action_value - value.data
             opc_action_value = rewards + DISCOUNT_FACTOR * opc_action_value * (1. - done)
             opc_advantage = opc_action_value - value.data
 
             # Actor
-            actor_loss = - Variable(importance_weights.clamp(max=truncation_parameter) * opc_advantage) \
+            actor_loss = - Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
                          * self.normal_density(Variable(actions), policy_mean, policy_logsd).log()
-            bias_correction = Variable((1 - truncation_parameter / alternative_importance_weights).clamp(min=0.) *
+            bias_correction = Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
                                        naive_alternative_advantage) \
                               * self.normal_density(Variable(alternative_actions), policy_mean, policy_logsd).log()
             actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
@@ -284,6 +282,20 @@ class ContinuousAgent(Agent):
                                                                   average_policy_mean, average_policy_logsd)
             torch.autograd.backward((policy_mean, policy_logsd), actor_gradients, retain_graph=True)
 
+            # Critic
+            critic_loss = Variable(retrace_action_value - action_value.data) * action_value \
+                          + Variable(importance_weights.clamp(max=1.) * (retrace_action_value - action_value.data)) * value
+            critic_loss.mean().backward(retain_graph=True)
+
+            # Entropy
+            entropy_loss = ENTROPY_REGULARIZATION * (policy_logsd + 0.5 * np.log(2 * np.pi * np.e)).sum(-1)
+            entropy_loss.mean().backward(retain_graph=True)
+
+            retrace_action_value = truncation_parameter * (retrace_action_value - action_value.data) + value.data
+            opc_action_value = (opc_action_value - action_value.data) + value.data
+        self.brain.actor_critic.copy_gradients_from(actor_critic)
+        self.optimizer.step()
+        self.brain.average_actor_critic.copy_parameters_from(self.brain.actor_critic, decay=TRUST_REGION_DECAY)
 
         return None, None
 
