@@ -28,7 +28,7 @@ class ReplayBuffer:
             self.episodes.append([])
         self.episodes[-1].append(transition)
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, max_length=float('inf')):
         """
         Sample a batch of trajectories from the buffer. If they are of unequal length
         (which is likely), the trajectories will be padded with zero-reward transitions.
@@ -37,6 +37,9 @@ class ReplayBuffer:
         ----------
         batch_size : int
             The batch size of the sample.
+        max_length : int, optional
+            The maximum length of the batch. Longer batches will be randomly truncated
+            to fit this length.
 
         Returns
         -------
@@ -52,6 +55,9 @@ class ReplayBuffer:
                            for transition, previous_transition in zip(transitions, previous_transitions)]
             batch.append(Transition(*map(lambda data: torch.cat(data, dim=0), zip(*transitions))))
             previous_transitions = transitions
+        if len(batch) > max_length:
+            start = random.randrange(len(batch) - max_length)
+            batch = batch[start:start+max_length]
         return batch
 
     @staticmethod

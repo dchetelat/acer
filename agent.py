@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import replay_memory
+import math
 from torch.autograd import Variable
 from brain import DiscreteActorCritic, ContinuousActorCritic
 from core import *
@@ -38,8 +39,6 @@ class Agent:
             The actor-critic model to use to explore.
         """
         state = torch.FloatTensor(self.env.env.state)
-        # if isinstance(state, tuple):
-        #     state = np.array(list(state))
         trajectory = []
         for step in range(MAX_STEPS_BEFORE_UPDATE):
             if CONTROL is 'discrete':
@@ -57,6 +56,8 @@ class Agent:
                                                     policy_logsd.data.view(1, -1)], dim=1)
                 next_state, reward, done, _ = self.env.step(action.numpy())
                 next_state = torch.FloatTensor(next_state)
+                if math.isnan(reward):
+                    raise ValueError
             if self.render:
                 self.env.render()
             transition = replay_memory.Transition(states=state.view(1, -1),
@@ -113,7 +114,8 @@ class DiscreteAgent(Agent):
         actor_critic = DiscreteActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
 
-        trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE) if replay else self.explore(actor_critic)
+        trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE) if replay \
+                     else self.explore(actor_critic)
         if not trajectory:
             return None, None
 
@@ -234,7 +236,8 @@ class ContinuousAgent(Agent):
         actor_critic = ContinuousActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
 
-        trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE) if replay else self.explore(actor_critic)
+        trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE) if replay \
+                     else self.explore(actor_critic)
         if not trajectory:
             return None, None
         if not replay:
@@ -259,7 +262,7 @@ class ContinuousAgent(Agent):
             importance_weights = self.normal_density(actions, policy_mean.data, policy_logsd.data)
             importance_weights /= self.normal_density(actions,  exploration_policy_mean, exploration_policy_logsd)
             truncation_parameter = importance_weights.pow(1 / ACTION_SPACE_DIM).clamp(max=1.)[0, 0]
-            alternative_actions = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
+            alternative_actions = torch.normal(policy_mean.data, torch.ones(policy_mean.size(0), 1) * policy_logsd.data)
             _, _, alternative_action_value = actor_critic(Variable(states), Variable(alternative_actions))
             alternative_importance_weights = self.normal_density(alternative_actions,
                                                                  policy_mean.data, policy_logsd.data)
