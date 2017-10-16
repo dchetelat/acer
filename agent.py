@@ -24,7 +24,8 @@ class Agent:
         self.render = render
         self.buffer = replay_memory.ReplayBuffer()
         self.brain = brain
-        self.optimizer = torch.optim.Adam(brain.actor_critic.parameters())
+        self.optimizer = torch.optim.Adam(brain.actor_critic.parameters(),
+                                          lr=LEARNING_RATE)
 
     def learning_iteration(self, replay):
         raise NotImplementedError
@@ -47,15 +48,17 @@ class Agent:
                 action = action.data
                 exploration_statistics = action_probabilities.data.view(1, -1)
                 next_state, reward, done, _ = self.env.step(action.numpy()[0])
-                next_state = torch.FloatTensor(next_state)
+                next_state = torch.from_numpy(next_state).float()
             else:
                 policy_mean, *_ = actor_critic(Variable(state))
                 policy_logsd = actor_critic.policy_logsd
                 action = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
                 exploration_statistics = torch.cat([policy_mean.data.view(1, -1),
                                                     policy_logsd.data.view(1, -1)], dim=1)
-                next_state, reward, done, _ = self.env.step(action.numpy())
-                next_state = torch.FloatTensor(next_state)
+                scaled_action = float(self.env.action_space.low) \
+                                + float(self.env.action_space.high - self.env.action_space.low) * torch.sigmoid(action)
+                next_state, reward, done, _ = self.env.step(scaled_action.numpy())
+                next_state = torch.from_numpy(next_state).float()
                 if math.isnan(reward):
                     raise ValueError
             if self.render:
@@ -262,7 +265,8 @@ class ContinuousAgent(Agent):
             importance_weights = self.normal_density(actions, policy_mean.data, policy_logsd.data)
             importance_weights /= self.normal_density(actions,  exploration_policy_mean, exploration_policy_logsd)
             truncation_parameter = importance_weights.pow(1 / ACTION_SPACE_DIM).clamp(max=1.)[0, 0]
-            alternative_actions = torch.normal(policy_mean.data, torch.ones(policy_mean.size(0), 1) * policy_logsd.data)
+            alternative_actions = torch.normal(policy_mean.data,
+                                               torch.exp(torch.ones(policy_mean.size(0), 1) * policy_logsd.data))
             _, _, alternative_action_value = actor_critic(Variable(states), Variable(alternative_actions))
             alternative_importance_weights = self.normal_density(alternative_actions,
                                                                  policy_mean.data, policy_logsd.data)
@@ -275,10 +279,10 @@ class ContinuousAgent(Agent):
 
             # Actor
             actor_loss = - Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
-                         * self.normal_density(Variable(actions), policy_mean, policy_logsd).log()
+                         * self.normal_log_density(Variable(actions), policy_mean, policy_logsd)
             bias_correction = Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
                                        naive_alternative_advantage) \
-                              * self.normal_density(Variable(alternative_actions), policy_mean, policy_logsd).log()
+                              * self.normal_log_density(Variable(alternative_actions), policy_mean, policy_logsd)
             actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
             actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
             actor_gradients = self.continuous_trust_region_update(actor_gradients, policy_mean, policy_logsd,
@@ -294,6 +298,9 @@ class ContinuousAgent(Agent):
             entropy_loss = ENTROPY_REGULARIZATION * (policy_logsd + 0.5 * np.log(2 * np.pi * np.e)).sum(-1)
             entropy_loss.mean().backward(retain_graph=True)
 
+            if math.isnan(sum([param.grad.data.sum() for param in actor_critic.parameters()])):
+                raise ValueError
+
             retrace_action_value = truncation_parameter * (retrace_action_value - action_value.data) + value.data
             opc_action_value = (opc_action_value - action_value.data) + value.data
         self.brain.actor_critic.copy_gradients_from(actor_critic)
@@ -305,6 +312,10 @@ class ContinuousAgent(Agent):
     @staticmethod
     def normal_density(action, mean, logsd):
         return torch.exp(-(action - mean).pow(2) / 2 / torch.exp(2 * logsd)) / np.sqrt(2 * np.pi) / torch.exp(logsd)
+
+    @staticmethod
+    def normal_log_density(action, mean, logsd):
+        return -(action - mean).pow(2) / 2 / torch.exp(2 * logsd) - np.sqrt(2 * np.pi) - logsd
 
     @staticmethod
     def continuous_trust_region_update(actor_gradients, mean, logsd, average_mean, average_logsd):

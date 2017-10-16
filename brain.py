@@ -123,7 +123,7 @@ class ContinuousActorCritic(ActorCritic):
             action_value = advantage + value
 
             action_samples = [Variable(torch.normal(policy_mean.data,
-                                                    self.policy_logsd.data * torch.ones(policy_mean.size())))
+                                                    torch.exp(self.policy_logsd.data * torch.ones(policy_mean.size()))))
                               for _ in range(5)]
             advantage_samples = [self.sdn_forward(states, action_sample)[0] for action_sample in action_samples]
             action_value -= sum(advantage_samples) / len(advantage_samples)
@@ -132,7 +132,7 @@ class ContinuousActorCritic(ActorCritic):
             return policy_mean, value, None
 
     def sdn_forward(self, states, actions):
-        hidden = F.relu(self.sdn_state_input_layer(states) + self.sdn_action_input_layer(actions))
+        hidden = F.relu(self.sdn_state_input_layer(states) + self.sdn_action_input_layer(F.tanh(actions)))
         hidden = F.relu(self.sdn_hidden_layer(hidden))
         advantage = self.sdn_advantage_layer(hidden)
         return advantage
