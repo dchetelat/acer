@@ -185,7 +185,6 @@ class ContinuousAgent(Agent):
                 print("Episode #{}, noise ratio {:.2f}".format(episode, noise_ratio), end="")
             while not end_of_episode:
                 trajectory = self.explore(self.brain.actor_critic, noise_ratio)
-                # self.learning_iteration(trajectory)
                 end_of_episode = trajectory[-1].done[0, 0]
                 episode_rewards += sum([transition.rewards[0, 0] for transition in trajectory])
                 for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):

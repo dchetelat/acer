@@ -28,8 +28,7 @@ if __name__ == "__main__":
         run_agent(brain.brain, render=True)
     else:
         processes = [mp.Process(target=run_agent, args=(brain.brain, True))
-                     for _ in range(NUMBER_OF_AGENTS - 1)]
-        processes.append(mp.Process(target=run_agent, args=(brain.brain, True)))
+                     for _ in range(NUMBER_OF_AGENTS)]
         for process in processes:
             process.start()
 
