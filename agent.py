@@ -4,6 +4,7 @@ import replay_memory
 import math
 from torch.autograd import Variable
 from brain import DiscreteActorCritic, ContinuousActorCritic
+from ornstein_uhlenbeck import OrnsteinUhlenbeckProcess
 from core import *
 
 
@@ -27,100 +28,35 @@ class Agent:
         self.optimizer = torch.optim.Adam(brain.actor_critic.parameters(),
                                           lr=LEARNING_RATE)
 
-    def learning_iteration(self, replay):
-        raise NotImplementedError
-
-    def explore(self, actor_critic):
-        """
-        Explore an environment by taking a sequence of actions and saving the results in the memory.
-
-        Parameters
-        ----------
-        actor_critic : ActorCritic
-            The actor-critic model to use to explore.
-        """
-        state = torch.FloatTensor(self.env.env.state)
-        trajectory = []
-        for step in range(MAX_STEPS_BEFORE_UPDATE):
-            if CONTROL is 'discrete':
-                action_probabilities, *_ = actor_critic(Variable(state))
-                action = action_probabilities.multinomial()
-                action = action.data
-                exploration_statistics = action_probabilities.data.view(1, -1)
-                next_state, reward, done, _ = self.env.step(action.numpy()[0])
-                next_state = torch.from_numpy(next_state).float()
-            else:
-                policy_mean, *_ = actor_critic(Variable(state))
-                policy_logsd = actor_critic.policy_logsd
-                action = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
-                exploration_statistics = torch.cat([policy_mean.data.view(1, -1),
-                                                    policy_logsd.data.view(1, -1)], dim=1)
-                scaled_action = float(self.env.action_space.low) \
-                                + float(self.env.action_space.high - self.env.action_space.low) * torch.sigmoid(action)
-                next_state, reward, done, _ = self.env.step(scaled_action.numpy())
-                next_state = torch.from_numpy(next_state).float()
-                if math.isnan(reward):
-                    raise ValueError
-            if self.render:
-                self.env.render()
-            transition = replay_memory.Transition(states=state.view(1, -1),
-                                                  actions=action.view(1, -1),
-                                                  rewards=torch.FloatTensor([[reward]]),
-                                                  next_states=next_state.view(1, -1),
-                                                  done=torch.FloatTensor([[done]]),
-                                                  exploration_statistics=exploration_statistics)
-            self.buffer.add(transition)
-            trajectory.append(transition)
-            if done:
-                self.env.reset()
-                break
-            else:
-                state = next_state
-        return trajectory
-
 
 class DiscreteAgent(Agent):
     def __init__(self, brain, render=True):
         super().__init__(brain, render)
 
-    def run_episode(self):
-        """
-        Run a complete episode. Analogue of Algorithm 1 in the paper.
-        """
-        episode_rewards = 0.
-        end_of_episode = False
-        while not end_of_episode:
-            trajectory_rewards, end_of_episode = self.learning_iteration(replay=False)
-            episode_rewards += trajectory_rewards
-            for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
-                self.learning_iteration(replay=True)
-        if self.render:
-            print(", episode rewards {}".format(episode_rewards))
+    def run(self):
+        for episode in range(MAX_EPISODES):
+            episode_rewards = 0.
+            end_of_episode = False
+            if self.render:
+                print("Episode #{}".format(episode), end="")
+            while not end_of_episode:
+                trajectory = self.explore(self.brain.actor_critic)
+                self.learning_iteration(trajectory)
+                end_of_episode = trajectory[-1].done[0, 0]
+                episode_rewards += sum([transition.rewards[0, 0] for transition in trajectory])
+                for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
+                    trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE)
+                    if trajectory:
+                        self.learning_iteration(trajectory)
+            if self.render:
+                print(", episode rewards {}".format(episode_rewards))
 
-    def learning_iteration(self, replay):
+    def learning_iteration(self, trajectory):
         """
         Conduct a single discrete learning iteration. Analogue of Algorithm 2 in the paper.
-
-        Parameters
-        ----------
-        replay : boolean
-            Should the iteration replay from the buffer (off-policy learning) or
-            explore (on-policy learning)?
-
-        Returns
-        -------
-        trajectory_rewards : float or None
-            The total rewards accumulated during the iteration. None if replay.
-        end_of_episode : boolean or None
-            Did the iteration reach the end of an episode? None if replay.
         """
         actor_critic = DiscreteActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
-
-        trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE) if replay \
-                     else self.explore(actor_critic)
-        if not trajectory:
-            return None, None
 
         _, _, _, next_states, _, _ = trajectory[-1]
         action_probabilities, action_values = actor_critic(Variable(next_states))
@@ -163,12 +99,40 @@ class DiscreteAgent(Agent):
         self.optimizer.step()
         self.brain.average_actor_critic.copy_parameters_from(self.brain.actor_critic, decay=TRUST_REGION_DECAY)
 
-        if not replay:
-            end_of_episode = trajectory[-1].done[0, 0]
-            trajectory_rewards = sum([transition.rewards[0, 0] for transition in trajectory])
-            return trajectory_rewards, end_of_episode
-        else:
-            return None, None
+    def explore(self, actor_critic):
+        """
+        Explore an environment by taking a sequence of actions and saving the results in the memory.
+
+        Parameters
+        ----------
+        actor_critic : ActorCritic
+            The actor-critic model to use to explore.
+        """
+        state = torch.FloatTensor(self.env.env.state)
+        trajectory = []
+        for step in range(MAX_STEPS_BEFORE_UPDATE):
+            action_probabilities, *_ = actor_critic(Variable(state))
+            action = action_probabilities.multinomial()
+            action = action.data
+            exploration_statistics = action_probabilities.data.view(1, -1)
+            next_state, reward, done, _ = self.env.step(action.numpy()[0])
+            next_state = torch.from_numpy(next_state).float()
+            if self.render and VISUAL:
+                self.env.render()
+            transition = replay_memory.Transition(states=state.view(1, -1),
+                                                  actions=action.view(1, -1),
+                                                  rewards=torch.FloatTensor([[reward]]),
+                                                  next_states=next_state.view(1, -1),
+                                                  done=torch.FloatTensor([[done]]),
+                                                  exploration_statistics=exploration_statistics)
+            self.buffer.add(transition)
+            trajectory.append(transition)
+            if done:
+                self.env.reset()
+                break
+            else:
+                state = next_state
+        return trajectory
 
     @staticmethod
     def discrete_trust_region_update(actor_gradients, action_probabilities, average_action_probabilities):
@@ -205,53 +169,111 @@ class DiscreteAgent(Agent):
 class ContinuousAgent(Agent):
     def __init__(self, brain, render=True):
         super().__init__(brain, render)
+        # Non-standard
+        self.noise = OrnsteinUhlenbeckProcess(size=ACTION_SPACE_DIM, theta=NOISE_SCALE * 0.15,
+                                              mu=- 0.1, sigma=NOISE_SCALE * 0.2)
+        self.initial_state = None
+        self.final_state = None
+        self.final_action = None
 
-    def run_episode(self):
-        """
-        Run a complete episode.
-        """
-        episode_rewards = 0.
-        end_of_episode = False
-        while not end_of_episode:
-            trajectory_rewards, end_of_episode = self.learning_iteration(replay=False)
-            episode_rewards += trajectory_rewards
-            for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
-                self.learning_iteration(replay=True)
-        if self.render:
-            print(", episode rewards {}".format(episode_rewards))
+    def run(self):
+        for episode in range(MAX_EPISODES):
+            noise_ratio = 1. - (episode / 50) if episode < 50 else 0.
+            episode_rewards = 0.
+            end_of_episode = False
+            if self.render:
+                print("Episode #{}, noise ratio {:.2f}".format(episode, noise_ratio), end="")
+            while not end_of_episode:
+                trajectory = self.explore(self.brain.actor_critic, noise_ratio)
+                # self.learning_iteration(trajectory)
+                end_of_episode = trajectory[-1].done[0, 0]
+                episode_rewards += sum([transition.rewards[0, 0] for transition in trajectory])
+                for trajectory_count in range(np.random.poisson(REPLAY_RATIO)):
+                    trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE)
+                    if trajectory:
+                        self.learning_iteration(trajectory)
+            if self.initial_state is not None:
+                print(", initial state value {:.2f}"
+                      .format(self.brain.actor_critic(Variable(self.initial_state))[1].data[0, 0]), end="")
+            if self.final_state is not None:
+                mean, value, action_value = self.brain.actor_critic(Variable(self.final_state), Variable(self.final_action))
+                print(", final state value {:.2f}, final state-action value {:.2f}, final state policy mean {:.2f}"
+                      .format(value.data[0, 0], action_value.data[0, 0], mean.data[0, 0]), end="")
+            print(", policy standard deviation {:.2f}"
+                  .format(torch.exp(self.brain.actor_critic.policy_logsd).data[0, 0]), end="")
+            self.noise.reset()
+            if self.render:
+                print(", episode rewards {:.2f}".format(episode_rewards))
 
-    def learning_iteration(self, replay):
+    def explore(self, actor_critic, noise_ratio=0.):
         """
-        Conduct a single continuous learning iteration. Analogue of Algorithm 3 in the paper.
+        Explore an environment by taking a sequence of actions and saving the results in the memory.
 
         Parameters
         ----------
-        replay : boolean
-            Should the iteration replay from the buffer or explore?
+        actor_critic : ActorCritic
+            The actor-critic model to use to explore.
+        noise_ratio : float in [0, 1], optional
+            What fraction of the action should be exploration noise?
+        """
+        state = torch.FloatTensor(self.env.env.state)
+        trajectory = []
+        for step in range(MAX_STEPS_BEFORE_UPDATE):
+            policy_mean, *_ = actor_critic(Variable(state))
+            policy_logsd = actor_critic.policy_logsd
+            action = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
+            if USE_ORNSTEIN_UHLENBECK:
+                noise_mean, noise_sd = self.noise.sampling_parameters()
+                noise = torch.from_numpy(self.noise.sample()).float()
+                action = noise_ratio * noise + (1. - noise_ratio) * action
+                sampling_mean = noise_ratio * torch.from_numpy(noise_mean).float() + (1. - noise_ratio) * policy_mean.data
+                sampling_logsd = 0.5 * torch.log(noise_ratio**2 * torch.from_numpy(noise_sd).float().pow(2)
+                                           + (1. - noise_ratio)**2 * torch.exp(2 * policy_logsd.data))
+                exploration_statistics = torch.cat([sampling_mean.view(1, -1), sampling_logsd.view(1, -1)], dim=1)
+            else:
+                exploration_statistics = torch.cat([policy_mean.data.view(1, -1), policy_logsd.data.view(1, -1)], dim=1)
 
-        Returns
-        -------
-        trajectory_rewards : float or None
-            The total rewards accumulated during the iteration. None if replay.
-        end_of_episode : boolean or None
-            Did the iteration reach the end of an episode? None if replay.
+            scaled_action = float(self.env.action_space.low) \
+                            + float(self.env.action_space.high - self.env.action_space.low) * torch.sigmoid(action)
+            next_state, reward, done, _ = self.env.step(scaled_action.numpy())
+            next_state = torch.from_numpy(next_state).float()
+            if self.render and VISUAL:
+                self.env.render()
+            transition = replay_memory.Transition(states=state.view(1, -1),
+                                                  actions=action.view(1, -1),
+                                                  rewards=torch.FloatTensor([[reward]]),
+                                                  next_states=next_state.view(1, -1),
+                                                  done=torch.FloatTensor([[done]]),
+                                                  exploration_statistics=exploration_statistics)
+            self.buffer.add(transition)
+            trajectory.append(transition)
+            if done:
+                self.env.reset()
+                break
+            else:
+                state = next_state
+        return trajectory
+
+    def learning_iteration(self, trajectory):
+        """
+        Conduct a single continuous learning iteration. Analogue of Algorithm 3 in the paper.
         """
         actor_critic = ContinuousActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
 
-        trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE) if replay \
-                     else self.explore(actor_critic)
-        if not trajectory:
-            return None, None
-        if not replay:
-            end_of_episode = trajectory[-1].done[0, 0]
-            trajectory_rewards = sum([transition.rewards[0, 0] for transition in trajectory])
-            return trajectory_rewards, end_of_episode
-
-        _, _, _, next_states, _, _ = trajectory[-1]
+        final_state, final_action, final_reward, next_states, _, _ = trajectory[-1]
         _, final_value, _ = actor_critic(Variable(next_states))
         retrace_action_value = final_value.data
         opc_action_value = final_value.data
+
+        if self.render:
+            if self.initial_state is None:
+                self.initial_state = trajectory[0][0]
+            if final_reward[0, 0] > 0.:
+                if self.final_state is None:
+                    self.final_state = final_state
+                if self.final_action is None:
+                    self.final_action = final_action
 
         for states, actions, rewards, _, done, exploration_statistics in reversed(trajectory):
             policy_mean, value, action_value = actor_critic(Variable(states), Variable(actions))
@@ -264,7 +286,6 @@ class ContinuousAgent(Agent):
 
             importance_weights = self.normal_density(actions, policy_mean.data, policy_logsd.data)
             importance_weights /= self.normal_density(actions,  exploration_policy_mean, exploration_policy_logsd)
-            truncation_parameter = importance_weights.pow(1 / ACTION_SPACE_DIM).clamp(max=1.)[0, 0]
             alternative_actions = torch.normal(policy_mean.data,
                                                torch.exp(torch.ones(policy_mean.size(0), 1) * policy_logsd.data))
             _, _, alternative_action_value = actor_critic(Variable(states), Variable(alternative_actions))
@@ -272,34 +293,34 @@ class ContinuousAgent(Agent):
                                                                  policy_mean.data, policy_logsd.data)
             alternative_importance_weights /= self.normal_density(alternative_actions,
                                                                   exploration_policy_mean, exploration_policy_logsd)
+            truncation_parameter = importance_weights.pow(1 / ACTION_SPACE_DIM).clamp(max=1.)[0, 0]
 
-            naive_alternative_advantage = alternative_action_value.data - value.data
+            retrace_action_value = rewards + DISCOUNT_FACTOR * retrace_action_value * (1. - done)
             opc_action_value = rewards + DISCOUNT_FACTOR * opc_action_value * (1. - done)
+            naive_alternative_advantage = alternative_action_value.data - value.data
             opc_advantage = opc_action_value - value.data
 
             # Actor
-            actor_loss = - Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
+            actor_loss = - 0.1 * Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
                          * self.normal_log_density(Variable(actions), policy_mean, policy_logsd)
-            bias_correction = Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
+            bias_correction = - 0.1 * Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
                                        naive_alternative_advantage) \
                               * self.normal_log_density(Variable(alternative_actions), policy_mean, policy_logsd)
-            actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
-            actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
-            actor_gradients = self.continuous_trust_region_update(actor_gradients, policy_mean, policy_logsd,
-                                                                  average_policy_mean, average_policy_logsd)
-            torch.autograd.backward((policy_mean, policy_logsd), actor_gradients, retain_graph=True)
+            actor_loss += bias_correction
+            # actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
+            # actor_gradients = self.continuous_trust_region_update(actor_gradients, policy_mean, policy_logsd,
+            #                                                       average_policy_mean, average_policy_logsd)
+            # torch.autograd.backward((policy_mean, policy_logsd), actor_gradients, retain_graph=True)
+            actor_loss.mean().backward(retain_graph=True)
 
             # Critic
-            critic_loss = Variable(retrace_action_value - action_value.data) * action_value \
-                          + Variable(importance_weights.clamp(max=1.) * (retrace_action_value - action_value.data)) * value
+            critic_loss = - Variable(retrace_action_value - action_value.data) * action_value \
+                          - Variable(importance_weights.clamp(max=1.) * (retrace_action_value - action_value.data)) * value
             critic_loss.mean().backward(retain_graph=True)
 
             # Entropy
-            entropy_loss = ENTROPY_REGULARIZATION * (policy_logsd + 0.5 * np.log(2 * np.pi * np.e)).sum(-1)
-            entropy_loss.mean().backward(retain_graph=True)
-
-            if math.isnan(sum([param.grad.data.sum() for param in actor_critic.parameters()])):
-                raise ValueError
+            # entropy_loss = - ENTROPY_REGULARIZATION * (policy_logsd + 0.5 * np.log(2 * np.pi * np.e)).sum(-1)
+            # entropy_loss.mean().backward(retain_graph=True)
 
             retrace_action_value = truncation_parameter * (retrace_action_value - action_value.data) + value.data
             opc_action_value = (opc_action_value - action_value.data) + value.data
@@ -307,15 +328,18 @@ class ContinuousAgent(Agent):
         self.optimizer.step()
         self.brain.average_actor_critic.copy_parameters_from(self.brain.actor_critic, decay=TRUST_REGION_DECAY)
 
-        return None, None
-
     @staticmethod
     def normal_density(action, mean, logsd):
+        logsd = torch.ones(mean.size(0), 1) * logsd
         return torch.exp(-(action - mean).pow(2) / 2 / torch.exp(2 * logsd)) / np.sqrt(2 * np.pi) / torch.exp(logsd)
 
     @staticmethod
     def normal_log_density(action, mean, logsd):
-        return -(action - mean).pow(2) / 2 / torch.exp(2 * logsd) - np.sqrt(2 * np.pi) - logsd
+        try:
+            logsd = Variable(torch.ones(mean.size(0), 1)) * logsd
+        except TypeError:
+            logsd = torch.ones(mean.size(0), 1) * logsd
+        return -(action - mean).pow(2) / 2 / torch.exp(2 * logsd) - 0.5 * np.log(2 * np.pi) - logsd
 
     @staticmethod
     def continuous_trust_region_update(actor_gradients, mean, logsd, average_mean, average_logsd):

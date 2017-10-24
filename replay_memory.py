@@ -1,5 +1,6 @@
 import random
 import torch
+import numpy as np
 from itertools import zip_longest
 from collections import deque, namedtuple
 from core import *
@@ -28,7 +29,7 @@ class ReplayBuffer:
             self.episodes.append([])
         self.episodes[-1].append(transition)
 
-    def sample(self, batch_size, max_length=float('inf')):
+    def sample(self, batch_size, window_length=float('inf')):
         """
         Sample a batch of trajectories from the buffer. If they are of unequal length
         (which is likely), the trajectories will be padded with zero-reward transitions.
@@ -37,28 +38,34 @@ class ReplayBuffer:
         ----------
         batch_size : int
             The batch size of the sample.
-        max_length : int, optional
-            The maximum length of the batch. Longer batches will be randomly truncated
-            to fit this length.
+        window_length : int, optional
+            The window length.
 
         Returns
         -------
         list of Transition's
             A batched sampled trajectory.
         """
-        trajectory_indices = random.sample(range(len(self.episodes)-1), min(batch_size, len(self.episodes)-1))
-        trajectories = [self.episodes[index] for index in trajectory_indices]
-        batch = []
-        previous_transitions = tuple([None for _ in range(batch_size)])
-        for transitions in zip_longest(*trajectories, fillvalue=None):
-            transitions = [transition if transition else self.extend(previous_transition)
-                           for transition, previous_transition in zip(transitions, previous_transitions)]
-            batch.append(Transition(*map(lambda data: torch.cat(data, dim=0), zip(*transitions))))
-            previous_transitions = transitions
-        if len(batch) > max_length:
-            start = random.randrange(len(batch) - max_length)
-            batch = batch[start:start+max_length]
-        return batch
+        batched_trajectory = []
+        trajectory_indices = random.choices(range(len(self.episodes)-1), k=min(batch_size, len(self.episodes)-1))
+        trajectories = []
+        for trajectory in [self.episodes[index] for index in trajectory_indices]:
+            start = random.choices(range(len(trajectory)), k=1)[0]
+            trajectories.append(trajectory[start:start + window_length])
+        smallest_trajectory_length = min([len(trajectory) for trajectory in trajectories]) if trajectories else 0
+        for index in range(len(trajectories)):
+            trajectories[index] = trajectories[index][-smallest_trajectory_length:]
+        for transitions in zip(*trajectories):
+            batched_transition = Transition(*[torch.cat(data, dim=0) for data in zip(*transitions)])
+            batched_trajectory.append(batched_transition)
+        # previous_transitions = tuple([None for _ in range(batch_size)])
+        # for transitions in zip_longest(*trajectories, fillvalue=None):
+        #     transitions = [transition if transition else self.extend(previous_transition)
+        #                    for transition, previous_transition in zip(transitions, previous_transitions)]
+        #     batched_transition = Transition(*map(lambda data: torch.cat(data, dim=0), zip(*transitions)))
+        #     batched_trajectory.append(batched_transition)
+        #     previous_transitions = transitions
+        return batched_trajectory
 
     @staticmethod
     def extend(transition):

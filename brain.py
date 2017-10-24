@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -85,7 +86,7 @@ class ContinuousActorCritic(ActorCritic):
         self.policy_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
         self.policy_hidden_layer = torch.nn.Linear(32, 32)
         self.policy_mean_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
-        self.policy_logsd = torch.nn.Parameter(torch.ones((1, ACTION_SPACE_DIM)))
+        self.policy_logsd = torch.nn.Parameter(np.log(5) * torch.ones((1, ACTION_SPACE_DIM)))
         self.value_layer = torch.nn.Linear(32, 1)
 
         self.sdn_state_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
@@ -120,13 +121,13 @@ class ContinuousActorCritic(ActorCritic):
 
         if actions is not None:
             advantage = self.sdn_forward(states, actions)
-            action_value = advantage + value
 
             action_samples = [Variable(torch.normal(policy_mean.data,
-                                                    torch.exp(self.policy_logsd.data * torch.ones(policy_mean.size()))))
+                                                    torch.exp(torch.ones(policy_mean.size(0), 1) * self.policy_logsd.data)))
                               for _ in range(5)]
-            advantage_samples = [self.sdn_forward(states, action_sample)[0] for action_sample in action_samples]
-            action_value -= sum(advantage_samples) / len(advantage_samples)
+            advantage_samples = torch.cat([self.sdn_forward(states, action_sample).unsqueeze(-1)
+                                           for action_sample in action_samples], -1)
+            action_value = value + advantage - advantage_samples.mean(-1)
             return policy_mean, value, action_value
         else:
             return policy_mean, value, None

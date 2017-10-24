@@ -19,10 +19,7 @@ def run_agent(shared_brain, render=False):
         local_agent = agent.DiscreteAgent(shared_brain, render)
     else:
         local_agent = agent.ContinuousAgent(shared_brain, render)
-    for episode in range(MAX_EPISODES):
-        if render:
-            print("Episode #{}".format(episode), end="")
-        local_agent.run_episode()
+    local_agent.run()
 
 
 if __name__ == "__main__":
@@ -38,3 +35,6 @@ if __name__ == "__main__":
 
         for process in processes:
             process.join()
+
+def test():
+    run_agent(brain.brain, render=True)
