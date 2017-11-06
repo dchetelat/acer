@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 import replay_memory
-import math
 from torch.autograd import Variable
 from brain import DiscreteActorCritic, ContinuousActorCritic
 from ornstein_uhlenbeck import OrnsteinUhlenbeckProcess
@@ -37,6 +36,9 @@ class DiscreteAgent(Agent):
         super().__init__(brain, render, verbose)
 
     def run(self):
+        """
+        Run the agent for several episodes.
+        """
         for episode in range(MAX_EPISODES):
             episode_rewards = 0.
             end_of_episode = False
@@ -172,14 +174,13 @@ class DiscreteAgent(Agent):
 class ContinuousAgent(Agent):
     def __init__(self, brain, render=True, verbose=True):
         super().__init__(brain, render, verbose)
-        # Non-standard
         self.noise = OrnsteinUhlenbeckProcess(size=ACTION_SPACE_DIM, theta=ORNSTEIN_UHLENBECK_NOISE_SCALE * 0.15,
                                               mu=- 0.1, sigma=ORNSTEIN_UHLENBECK_NOISE_SCALE * 0.2)
-        self.initial_state = None
-        self.final_state = None
-        self.final_action = None
 
     def run(self):
+        """
+        Run the agent for several episodes.
+        """
         for episode in range(MAX_EPISODES):
             noise_ratio = INITIAL_ORNSTEIN_UHLENBECK_NOISE_RATIO - (episode / NUMBER_OF_EXPLORATION_EPISODES) \
                           if episode < NUMBER_OF_EXPLORATION_EPISODES * INITIAL_ORNSTEIN_UHLENBECK_NOISE_RATIO else 0.
@@ -195,15 +196,6 @@ class ContinuousAgent(Agent):
                     trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE)
                     if trajectory:
                         self.learning_iteration(trajectory)
-            if self.initial_state is not None:
-                print(", initial state value {:.2f}"
-                      .format(self.brain.actor_critic(Variable(self.initial_state))[1].data[0, 0]), end="")
-            if self.final_state is not None:
-                mean, value, action_value = self.brain.actor_critic(Variable(self.final_state), Variable(self.final_action))
-                print(", final state value {:.2f}, final state-action value {:.2f}, final state policy mean {:.2f}"
-                      .format(value.data[0, 0], action_value.data[0, 0], mean.data[0, 0]), end="")
-            print(", policy standard deviation {:.2f}"
-                  .format(torch.exp(self.brain.actor_critic.policy_logsd).data[0, 0]), end="")
             self.noise.reset()
             if self.verbose:
                 print(", episode rewards {:.2f}".format(episode_rewards))
@@ -262,19 +254,10 @@ class ContinuousAgent(Agent):
         actor_critic = ContinuousActorCritic()
         actor_critic.copy_parameters_from(self.brain.actor_critic)
 
-        final_state, final_action, final_reward, next_states, _, _ = trajectory[-1]
+        _, _, _, next_states, _, _ = trajectory[-1]
         _, final_value, _ = actor_critic(Variable(next_states))
         retrace_action_value = final_value.data
         opc_action_value = final_value.data
-
-        if self.verbose:
-            if self.initial_state is None:
-                self.initial_state = trajectory[0][0]
-            if final_reward[0, 0] > 0.:
-                if self.final_state is None:
-                    self.final_state = final_state
-                if self.final_action is None:
-                    self.final_action = final_action
 
         for states, actions, rewards, _, done, exploration_statistics in reversed(trajectory):
             policy_mean, value, action_value = actor_critic(Variable(states), Variable(actions))

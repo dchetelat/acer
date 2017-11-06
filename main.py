@@ -14,7 +14,7 @@ def run_agent(shared_brain, render=False, verbose=False):
         The shared brain the agents will use and update.
     render : boolean, optional
         Should the agent render its actions in the on-policy phase?
-    render : boolean, optional
+    verbose : boolean, optional
         Should the agent print progress to the console?
     """
     if CONTROL is 'discrete':
@@ -36,6 +36,7 @@ if __name__ == "__main__":
 
         for process in processes:
             process.join()
+
 
 def test():
     run_agent(brain.brain, render=True)
