@@ -300,17 +300,16 @@ class ContinuousAgent(Agent):
             opc_advantage = opc_action_value - value.data
 
             # Actor
-            actor_loss = - 0.1 * Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
+            actor_loss = - ACTOR_LOSS_WEIGHT * Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
                          * self.normal_log_density(Variable(actions), policy_mean, policy_logsd)
-            bias_correction = - 0.1 * Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
+            bias_correction = - ACTOR_LOSS_WEIGHT * Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
                                        naive_alternative_advantage) \
                               * self.normal_log_density(Variable(alternative_actions), policy_mean, policy_logsd)
             actor_loss += bias_correction
-            # actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
-            # actor_gradients = self.continuous_trust_region_update(actor_gradients, policy_mean, policy_logsd,
-            #                                                       average_policy_mean, average_policy_logsd)
-            # torch.autograd.backward((policy_mean, policy_logsd), actor_gradients, retain_graph=True)
-            actor_loss.mean().backward(retain_graph=True)
+            actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
+            actor_gradients = self.continuous_trust_region_update(actor_gradients, policy_mean, policy_logsd,
+                                                                  average_policy_mean, average_policy_logsd)
+            torch.autograd.backward((policy_mean, policy_logsd), actor_gradients, retain_graph=True)
 
             # Critic
             critic_loss = - Variable(retrace_action_value - action_value.data) * action_value \
@@ -318,8 +317,8 @@ class ContinuousAgent(Agent):
             critic_loss.mean().backward(retain_graph=True)
 
             # Entropy
-            # entropy_loss = - ENTROPY_REGULARIZATION * (policy_logsd + 0.5 * np.log(2 * np.pi * np.e)).sum(-1)
-            # entropy_loss.mean().backward(retain_graph=True)
+            entropy_loss = - ENTROPY_REGULARIZATION * (policy_logsd + 0.5 * np.log(2 * np.pi * np.e)).sum(-1)
+            entropy_loss.mean().backward(retain_graph=True)
 
             retrace_action_value = truncation_parameter * (retrace_action_value - action_value.data) + value.data
             opc_action_value = (opc_action_value - action_value.data) + value.data

@@ -86,7 +86,7 @@ class ContinuousActorCritic(ActorCritic):
         self.policy_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
         self.policy_hidden_layer = torch.nn.Linear(32, 32)
         self.policy_mean_layer = torch.nn.Linear(32, ACTION_SPACE_DIM)
-        self.policy_logsd = torch.nn.Parameter(np.log(5) * torch.ones((1, ACTION_SPACE_DIM)))
+        self.policy_logsd = torch.nn.Parameter(np.log(INITIAL_STANDARD_DEVIATION) * torch.ones((1, ACTION_SPACE_DIM)))
         self.value_layer = torch.nn.Linear(32, 1)
 
         self.sdn_state_input_layer = torch.nn.Linear(STATE_SPACE_DIM, 32)
