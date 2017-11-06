@@ -78,9 +78,9 @@ class DiscreteAgent(Agent):
             retrace_advantage = retrace_action_value - value
 
             # Actor
-            actor_loss = - Variable(importance_weights.gather(-1, action_indices.data).clamp(max=TRUNCATION_PARAMETER)
+            actor_loss = - ACTOR_LOSS_WEIGHT * Variable(importance_weights.gather(-1, action_indices.data).clamp(max=TRUNCATION_PARAMETER)
                                     * retrace_advantage) * action_probabilities.gather(-1, action_indices).log()
-            bias_correction = Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
+            bias_correction = ACTOR_LOSS_WEIGHT * Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
                                       naive_advantage * action_probabilities.data) * action_probabilities.log()
             actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
             actor_gradients = torch.autograd.grad(actor_loss.mean(), action_probabilities, retain_graph=True)
@@ -173,15 +173,16 @@ class ContinuousAgent(Agent):
     def __init__(self, brain, render=True, verbose=True):
         super().__init__(brain, render, verbose)
         # Non-standard
-        self.noise = OrnsteinUhlenbeckProcess(size=ACTION_SPACE_DIM, theta=NOISE_SCALE * 0.15,
-                                              mu=- 0.1, sigma=NOISE_SCALE * 0.2)
+        self.noise = OrnsteinUhlenbeckProcess(size=ACTION_SPACE_DIM, theta=ORNSTEIN_UHLENBECK_NOISE_SCALE * 0.15,
+                                              mu=- 0.1, sigma=ORNSTEIN_UHLENBECK_NOISE_SCALE * 0.2)
         self.initial_state = None
         self.final_state = None
         self.final_action = None
 
     def run(self):
         for episode in range(MAX_EPISODES):
-            noise_ratio = 1. - (episode / 50) if episode < 50 else 0.
+            noise_ratio = INITIAL_ORNSTEIN_UHLENBECK_NOISE_RATIO - (episode / NUMBER_OF_EXPLORATION_EPISODES) \
+                          if episode < NUMBER_OF_EXPLORATION_EPISODES * INITIAL_ORNSTEIN_UHLENBECK_NOISE_RATIO else 0.
             episode_rewards = 0.
             end_of_episode = False
             if self.verbose:
@@ -224,16 +225,14 @@ class ContinuousAgent(Agent):
             policy_mean, *_ = actor_critic(Variable(state))
             policy_logsd = actor_critic.policy_logsd
             action = torch.normal(policy_mean.data, torch.exp(policy_logsd.data))
-            if USE_ORNSTEIN_UHLENBECK:
-                noise_mean, noise_sd = self.noise.sampling_parameters()
-                noise = torch.from_numpy(self.noise.sample()).float()
-                action = noise_ratio * noise + (1. - noise_ratio) * action
-                sampling_mean = noise_ratio * torch.from_numpy(noise_mean).float() + (1. - noise_ratio) * policy_mean.data
-                sampling_logsd = 0.5 * torch.log(noise_ratio**2 * torch.from_numpy(noise_sd).float().pow(2)
-                                           + (1. - noise_ratio)**2 * torch.exp(2 * policy_logsd.data))
-                exploration_statistics = torch.cat([sampling_mean.view(1, -1), sampling_logsd.view(1, -1)], dim=1)
-            else:
-                exploration_statistics = torch.cat([policy_mean.data.view(1, -1), policy_logsd.data.view(1, -1)], dim=1)
+
+            noise_mean, noise_sd = self.noise.sampling_parameters()
+            noise = torch.from_numpy(self.noise.sample()).float()
+            action = noise_ratio * noise + (1. - noise_ratio) * action
+            sampling_mean = noise_ratio * torch.from_numpy(noise_mean).float() + (1. - noise_ratio) * policy_mean.data
+            sampling_logsd = 0.5 * torch.log(noise_ratio**2 * torch.from_numpy(noise_sd).float().pow(2)
+                                       + (1. - noise_ratio)**2 * torch.exp(2 * policy_logsd.data))
+            exploration_statistics = torch.cat([sampling_mean.view(1, -1), sampling_logsd.view(1, -1)], dim=1)
 
             scaled_action = float(self.env.action_space.low) \
                             + float(self.env.action_space.high - self.env.action_space.low) * torch.sigmoid(action)
