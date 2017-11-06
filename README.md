@@ -1,4 +1,8 @@
 # ACER
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/dchetelat/acer/blob/master/LICENSE.md)
+
+
 PyTorch implementation of both discrete and continuous ACER algorithm for reinforcement learning.
 
 (Original paper: Deepmind's [Sample Efficient Actor-Critic with Experience Replay](https://arxiv.org/abs/1611.01224).)
