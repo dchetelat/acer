@@ -80,11 +80,12 @@ class DiscreteAgent(Agent):
             retrace_advantage = retrace_action_value - value
 
             # Actor
-            actor_loss = - ACTOR_LOSS_WEIGHT * Variable(importance_weights.gather(-1, action_indices.data).clamp(max=TRUNCATION_PARAMETER)
-                                    * retrace_advantage) * action_probabilities.gather(-1, action_indices).log()
-            bias_correction = ACTOR_LOSS_WEIGHT * Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
+            actor_loss = - ACTOR_LOSS_WEIGHT * Variable(
+                importance_weights.gather(-1, action_indices.data).clamp(max=TRUNCATION_PARAMETER) * retrace_advantage) \
+                * action_probabilities.gather(-1, action_indices).log()
+            bias_correction = - ACTOR_LOSS_WEIGHT * Variable((1 - TRUNCATION_PARAMETER / importance_weights).clamp(min=0.) *
                                       naive_advantage * action_probabilities.data) * action_probabilities.log()
-            actor_loss += - bias_correction.sum(-1).unsqueeze(-1)
+            actor_loss += bias_correction.sum(-1).unsqueeze(-1)
             actor_gradients = torch.autograd.grad(actor_loss.mean(), action_probabilities, retain_graph=True)
             actor_gradients = self.discrete_trust_region_update(actor_gradients, action_probabilities,
                                                        Variable(average_action_probabilities.data))
@@ -287,8 +288,8 @@ class ContinuousAgent(Agent):
             # Actor
             actor_loss = - ACTOR_LOSS_WEIGHT * Variable(importance_weights.clamp(max=TRUNCATION_PARAMETER) * opc_advantage) \
                          * self.normal_log_density(Variable(actions), policy_mean, policy_logsd)
-            bias_correction = - ACTOR_LOSS_WEIGHT * Variable((1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) *
-                                       naive_alternative_advantage) \
+            bias_correction = - ACTOR_LOSS_WEIGHT * Variable(
+                (1 - TRUNCATION_PARAMETER / alternative_importance_weights).clamp(min=0.) * naive_alternative_advantage) \
                               * self.normal_log_density(Variable(alternative_actions), policy_mean, policy_logsd)
             actor_loss += bias_correction
             actor_gradients = torch.autograd.grad(actor_loss.mean(), (policy_mean, policy_logsd), retain_graph=True)
