@@ -18,11 +18,14 @@ class Agent:
         The brain to update.
     render : boolean, optional
         Should the agent render its actions in the on-policy phase?
+    verbose : boolean, optional
+        Should the agent print progress to the console?
     """
-    def __init__(self, brain, render=False):
+    def __init__(self, brain, render=False, verbose=False):
         self.env = gym.make(ENVIRONMENT_NAME)
         self.env.reset()
         self.render = render
+        self.verbose = verbose
         self.buffer = replay_memory.ReplayBuffer()
         self.brain = brain
         self.optimizer = torch.optim.Adam(brain.actor_critic.parameters(),
@@ -30,14 +33,14 @@ class Agent:
 
 
 class DiscreteAgent(Agent):
-    def __init__(self, brain, render=True):
-        super().__init__(brain, render)
+    def __init__(self, brain, render=True, verbose=True):
+        super().__init__(brain, render, verbose)
 
     def run(self):
         for episode in range(MAX_EPISODES):
             episode_rewards = 0.
             end_of_episode = False
-            if self.render:
+            if self.verbose:
                 print("Episode #{}".format(episode), end="")
             while not end_of_episode:
                 trajectory = self.explore(self.brain.actor_critic)
@@ -48,7 +51,7 @@ class DiscreteAgent(Agent):
                     trajectory = self.buffer.sample(OFF_POLICY_MINIBATCH_SIZE, MAX_REPLAY_SIZE)
                     if trajectory:
                         self.learning_iteration(trajectory)
-            if self.render:
+            if self.verbose:
                 print(", episode rewards {}".format(episode_rewards))
 
     def learning_iteration(self, trajectory):
@@ -117,7 +120,7 @@ class DiscreteAgent(Agent):
             exploration_statistics = action_probabilities.data.view(1, -1)
             next_state, reward, done, _ = self.env.step(action.numpy()[0])
             next_state = torch.from_numpy(next_state).float()
-            if self.render and VISUAL:
+            if self.render:
                 self.env.render()
             transition = replay_memory.Transition(states=state.view(1, -1),
                                                   actions=action.view(1, -1),
@@ -167,8 +170,8 @@ class DiscreteAgent(Agent):
 
 
 class ContinuousAgent(Agent):
-    def __init__(self, brain, render=True):
-        super().__init__(brain, render)
+    def __init__(self, brain, render=True, verbose=True):
+        super().__init__(brain, render, verbose)
         # Non-standard
         self.noise = OrnsteinUhlenbeckProcess(size=ACTION_SPACE_DIM, theta=NOISE_SCALE * 0.15,
                                               mu=- 0.1, sigma=NOISE_SCALE * 0.2)
@@ -181,7 +184,7 @@ class ContinuousAgent(Agent):
             noise_ratio = 1. - (episode / 50) if episode < 50 else 0.
             episode_rewards = 0.
             end_of_episode = False
-            if self.render:
+            if self.verbose:
                 print("Episode #{}, noise ratio {:.2f}".format(episode, noise_ratio), end="")
             while not end_of_episode:
                 trajectory = self.explore(self.brain.actor_critic, noise_ratio)
@@ -201,7 +204,7 @@ class ContinuousAgent(Agent):
             print(", policy standard deviation {:.2f}"
                   .format(torch.exp(self.brain.actor_critic.policy_logsd).data[0, 0]), end="")
             self.noise.reset()
-            if self.render:
+            if self.verbose:
                 print(", episode rewards {:.2f}".format(episode_rewards))
 
     def explore(self, actor_critic, noise_ratio=0.):
@@ -236,7 +239,7 @@ class ContinuousAgent(Agent):
                             + float(self.env.action_space.high - self.env.action_space.low) * torch.sigmoid(action)
             next_state, reward, done, _ = self.env.step(scaled_action.numpy())
             next_state = torch.from_numpy(next_state).float()
-            if self.render and VISUAL:
+            if self.render:
                 self.env.render()
             transition = replay_memory.Transition(states=state.view(1, -1),
                                                   actions=action.view(1, -1),
@@ -265,7 +268,7 @@ class ContinuousAgent(Agent):
         retrace_action_value = final_value.data
         opc_action_value = final_value.data
 
-        if self.render:
+        if self.verbose:
             if self.initial_state is None:
                 self.initial_state = trajectory[0][0]
             if final_reward[0, 0] > 0.:

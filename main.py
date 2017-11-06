@@ -4,7 +4,7 @@ from torch import multiprocessing as mp
 from core import *
 
 
-def run_agent(shared_brain, render=False):
+def run_agent(shared_brain, render=False, verbose=False):
     """
     Run the agent.
 
@@ -14,11 +14,13 @@ def run_agent(shared_brain, render=False):
         The shared brain the agents will use and update.
     render : boolean, optional
         Should the agent render its actions in the on-policy phase?
+    render : boolean, optional
+        Should the agent print progress to the console?
     """
     if CONTROL is 'discrete':
-        local_agent = agent.DiscreteAgent(shared_brain, render)
+        local_agent = agent.DiscreteAgent(shared_brain, render, verbose)
     else:
-        local_agent = agent.ContinuousAgent(shared_brain, render)
+        local_agent = agent.ContinuousAgent(shared_brain, render, verbose)
     local_agent.run()
 
 
@@ -27,7 +29,7 @@ if __name__ == "__main__":
         # Don't bother with multiprocessing if only one agent
         run_agent(brain.brain, render=True)
     else:
-        processes = [mp.Process(target=run_agent, args=(brain.brain, True))
+        processes = [mp.Process(target=run_agent, args=(brain.brain, False, True))
                      for _ in range(NUMBER_OF_AGENTS)]
         for process in processes:
             process.start()
