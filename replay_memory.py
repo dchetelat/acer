@@ -1,7 +1,5 @@
 import random
 import torch
-import numpy as np
-from itertools import zip_longest
 from collections import deque, namedtuple
 from core import *
 
@@ -58,13 +56,6 @@ class ReplayBuffer:
         for transitions in zip(*trajectories):
             batched_transition = Transition(*[torch.cat(data, dim=0) for data in zip(*transitions)])
             batched_trajectory.append(batched_transition)
-        # previous_transitions = tuple([None for _ in range(batch_size)])
-        # for transitions in zip_longest(*trajectories, fillvalue=None):
-        #     transitions = [transition if transition else self.extend(previous_transition)
-        #                    for transition, previous_transition in zip(transitions, previous_transitions)]
-        #     batched_transition = Transition(*map(lambda data: torch.cat(data, dim=0), zip(*transitions)))
-        #     batched_trajectory.append(batched_transition)
-        #     previous_transitions = transitions
         return batched_trajectory
 
     @staticmethod

@@ -118,7 +118,7 @@ class DiscreteAgent(Agent):
         trajectory = []
         for step in range(MAX_STEPS_BEFORE_UPDATE):
             action_probabilities, *_ = actor_critic(Variable(state))
-            action = action_probabilities.multinomial()
+            action = action_probabilities.multinomial(1)
             action = action.data
             exploration_statistics = action_probabilities.data.view(1, -1)
             next_state, reward, done, _ = self.env.step(action.numpy()[0])
@@ -266,7 +266,7 @@ class ContinuousAgent(Agent):
             average_policy_mean, *_ = self.brain.average_actor_critic(Variable(states), Variable(actions))
             average_policy_logsd = self.brain.average_actor_critic.policy_logsd
             exploration_statistics = torch.split(exploration_statistics,
-                                                 split_size=exploration_statistics.size(-1) // 2, dim=-1)
+                                                 split_size_or_sections=exploration_statistics.size(-1) // 2, dim=-1)
             exploration_policy_mean, exploration_policy_logsd = exploration_statistics
 
             importance_weights = self.normal_density(actions, policy_mean.data, policy_logsd.data)

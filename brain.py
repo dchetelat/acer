@@ -72,7 +72,7 @@ class DiscreteActorCritic(ActorCritic):
         """
         hidden = F.relu(self.input_layer(states))
         hidden = F.relu(self.hidden_layer(hidden))
-        action_probabilities = F.softmax(self.action_layer(hidden))
+        action_probabilities = F.softmax(self.action_layer(hidden), dim=-1)
         action_values = self.action_value_layer(hidden)
         return action_probabilities, action_values
 
