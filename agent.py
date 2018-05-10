@@ -353,6 +353,7 @@ class ContinuousAgent(Agent):
         updated_actor_gradients = []
         for actor_gradient, kullback_leibler_gradient in zip(actor_gradients, kullback_leibler_gradients):
             scale = actor_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1) - TRUST_REGION_CONSTRAINT
-            scale = torch.div(scale, actor_gradient.mul(actor_gradient).sum(-1).unsqueeze(-1)).clamp(min=0.)
+            scale = torch.div(scale, kullback_leibler_gradient.mul(kullback_leibler_gradient).sum(-1).unsqueeze(-1)
+                              ).clamp(min=0.)
             updated_actor_gradients.append(actor_gradient - scale * kullback_leibler_gradient)
         return updated_actor_gradients
